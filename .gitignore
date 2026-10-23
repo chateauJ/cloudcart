@@ -4,6 +4,17 @@ node_modules/
 *.tsbuildinfo
 .DS_Store
 
+# Backend Lambda build output (esbuild rebuilds this on demand, never commit it)
+backend/dist/
+
+# Terraform working directories and state - .terraform.lock.hcl IS committed
+# (it pins provider versions), everything else here is local/sensitive/regenerable
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
 # Planning docs - not part of the shipped application
 /architecture.md
 /spec.md

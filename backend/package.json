@@ -1,0 +1,23 @@
+{
+  "name": "cloudcart-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CloudCart Lambda functions",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build:products": "esbuild functions/products/handler.ts --bundle --minify --platform=node --target=node20 --outfile=dist/products/index.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.700.0",
+    "@aws-sdk/lib-dynamodb": "^3.700.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
+    "@types/node": "^20.14.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^5.6.0"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true
+  }
+}
