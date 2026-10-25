@@ -13,6 +13,16 @@ output "products_lambda_function_name" {
   value       = module.products_lambda.function_name
 }
 
+output "carts_table_name" {
+  description = "Name of the dev Carts table - inspect stored carts with the AWS CLI while testing"
+  value       = module.carts_table.table_name
+}
+
+output "cart_lambda_function_name" {
+  description = "Name of the dev Cart Lambda - find its logs at /aws/lambda/<this name>"
+  value       = module.cart_lambda.function_name
+}
+
 output "api_endpoint" {
   description = "Base URL of the dev HTTP API - curl it to test, and the frontend's API base URL later"
   value       = module.api.api_endpoint

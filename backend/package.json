@@ -5,7 +5,8 @@
   "description": "CloudCart Lambda functions",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build:products": "esbuild functions/products/handler.ts --bundle --minify --platform=node --target=node20 --outfile=dist/products/index.js"
+    "build:products": "esbuild functions/products/handler.ts --bundle --minify --platform=node --target=node20 --outfile=dist/products/index.js",
+    "build:cart": "esbuild functions/cart/handler.ts --bundle --minify --platform=node --target=node20 --outfile=dist/cart/index.js"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.700.0",
