@@ -1,0 +1,181 @@
+import { randomUUID } from "node:crypto";
+import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from "aws-lambda";
+import {
+  BatchGetCommand,
+  GetCommand,
+  QueryCommand,
+  TransactWriteCommand,
+} from "@aws-sdk/lib-dynamodb";
+import { TransactionCanceledException } from "@aws-sdk/client-dynamodb";
+import { docClient } from "../../shared/dynamodb";
+import { errorResponse, jsonResponse } from "../../shared/responses";
+import { getUserId } from "../../shared/auth";
+import { Cart, Order, OrderLineItem, Product } from "../../shared/types";
+
+const ORDERS_TABLE_NAME = process.env.ORDERS_TABLE_NAME;
+const ORDERS_USER_INDEX_NAME = process.env.ORDERS_USER_INDEX_NAME;
+const CARTS_TABLE_NAME = process.env.CARTS_TABLE_NAME;
+const PRODUCTS_TABLE_NAME = process.env.PRODUCTS_TABLE_NAME;
+
+const MAX_ORDER_LINES = 100; // BatchGetItem's per-request key limit
+const ORDER_HISTORY_LIMIT = 50;
+
+export async function handler(
+  event: APIGatewayProxyEventV2,
+): Promise<APIGatewayProxyResultV2> {
+  if (!ORDERS_TABLE_NAME || !ORDERS_USER_INDEX_NAME || !CARTS_TABLE_NAME || !PRODUCTS_TABLE_NAME) {
+    console.error("One or more required table/index environment variables are not set");
+    return errorResponse(500, "CONFIGURATION_ERROR", "Server is misconfigured");
+  }
+
+  const userId = getUserId(event);
+
+  try {
+    switch (event.routeKey) {
+      case "POST /orders":
+        return await createOrder(userId);
+      case "GET /orders":
+        return await listOrders(userId);
+      case "GET /orders/{id}": {
+        const orderId = event.pathParameters?.id;
+        if (!orderId) {
+          return errorResponse(400, "INVALID_REQUEST", "Missing order id in path");
+        }
+        return await getOrder(userId, orderId);
+      }
+      default:
+        return errorResponse(404, "ROUTE_NOT_FOUND", `No handler for ${event.routeKey}`);
+    }
+  } catch (err) {
+    // A failed condition inside a transaction surfaces as TransactionCanceledException,
+    // not ConditionalCheckFailedException - here it means the cart changed mid-checkout.
+    if (err instanceof TransactionCanceledException) {
+      return errorResponse(409, "CART_CONFLICT", "Cart changed during checkout; review it and retry");
+    }
+    console.error("orders handler failed", err);
+    return errorResponse(500, "INTERNAL_ERROR", "Something went wrong while processing the request");
+  }
+}
+
+async function createOrder(userId: string): Promise<APIGatewayProxyResultV2> {
+  const cartResult = await docClient.send(
+    new GetCommand({ TableName: CARTS_TABLE_NAME, Key: { userId } }),
+  );
+  const cart = cartResult.Item as Cart | undefined;
+
+  if (!cart || cart.items.length === 0) {
+    return errorResponse(400, "CART_EMPTY", "Cannot create an order from an empty cart");
+  }
+  if (cart.items.length > MAX_ORDER_LINES) {
+    return errorResponse(400, "CART_TOO_LARGE", `A cart can contain at most ${MAX_ORDER_LINES} products`);
+  }
+
+  const products = await loadProducts(cart.items.map((item) => item.productId));
+  const missing = cart.items.filter((item) => !products.has(item.productId));
+  if (missing.length > 0) {
+    return errorResponse(
+      400,
+      "PRODUCT_NOT_FOUND",
+      `No longer available: ${missing.map((item) => item.productId).join(", ")}`,
+    );
+  }
+
+  const items: OrderLineItem[] = cart.items.map((item) => ({
+    productId: item.productId,
+    quantity: item.quantity,
+    unitPrice: products.get(item.productId)!.price,
+  }));
+
+  const now = new Date().toISOString();
+  const order: Order = {
+    orderId: `order_${randomUUID()}`,
+    userId,
+    status: "PENDING", // inventory is reserved asynchronously (Milestone 4), not here
+    total: calculateTotal(items),
+    items,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  // All-or-nothing: the order is created AND the cart is cleared, or neither happens.
+  // The cart condition rejects checkout if the cart was edited after we read it.
+  await docClient.send(
+    new TransactWriteCommand({
+      TransactItems: [
+        {
+          Put: {
+            TableName: ORDERS_TABLE_NAME,
+            Item: order,
+            ConditionExpression: "attribute_not_exists(orderId)",
+          },
+        },
+        {
+          Delete: {
+            TableName: CARTS_TABLE_NAME,
+            Key: { userId },
+            ConditionExpression: "updatedAt = :cartUpdatedAt",
+            ExpressionAttributeValues: { ":cartUpdatedAt": cart.updatedAt },
+          },
+        },
+      ],
+    }),
+  );
+
+  return jsonResponse(201, order);
+}
+
+async function listOrders(userId: string): Promise<APIGatewayProxyResultV2> {
+  const result = await docClient.send(
+    new QueryCommand({
+      TableName: ORDERS_TABLE_NAME,
+      IndexName: ORDERS_USER_INDEX_NAME,
+      KeyConditionExpression: "userId = :userId",
+      ExpressionAttributeValues: { ":userId": userId },
+      ScanIndexForward: false, // GSI sort key is createdAt, so descending = newest first
+      Limit: ORDER_HISTORY_LIMIT,
+    }),
+  );
+  return jsonResponse(200, result.Items ?? []);
+}
+
+async function getOrder(userId: string, orderId: string): Promise<APIGatewayProxyResultV2> {
+  const result = await docClient.send(
+    new GetCommand({ TableName: ORDERS_TABLE_NAME, Key: { orderId } }),
+  );
+  const order = result.Item as Order | undefined;
+
+  // Another user's order is reported as not found, so order IDs can't be probed for existence
+  if (!order || order.userId !== userId) {
+    return errorResponse(404, "ORDER_NOT_FOUND", `Order ${orderId} does not exist`);
+  }
+
+  return jsonResponse(200, order);
+}
+
+async function loadProducts(productIds: string[]): Promise<Map<string, Product>> {
+  const result = await docClient.send(
+    new BatchGetCommand({
+      RequestItems: {
+        [PRODUCTS_TABLE_NAME!]: { Keys: productIds.map((productId) => ({ productId })) },
+      },
+    }),
+  );
+
+  // DynamoDB may return part of a batch under load; treat that as a retryable server error
+  // rather than silently pricing an order from incomplete data.
+  if (Object.keys(result.UnprocessedKeys ?? {}).length > 0) {
+    throw new Error("BatchGetItem returned unprocessed keys for products");
+  }
+
+  const items = (result.Responses?.[PRODUCTS_TABLE_NAME!] ?? []) as Product[];
+  return new Map(items.map((product) => [product.productId, product]));
+}
+
+// Sum in integer cents - floating point dollars drift (0.1 + 0.2 !== 0.3).
+function calculateTotal(items: OrderLineItem[]): number {
+  const cents = items.reduce(
+    (sum, item) => sum + Math.round(item.unitPrice * 100) * item.quantity,
+    0,
+  );
+  return cents / 100;
+}

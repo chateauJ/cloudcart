@@ -23,6 +23,21 @@ output "cart_lambda_function_name" {
   value       = module.cart_lambda.function_name
 }
 
+output "orders_table_name" {
+  description = "Name of the dev Orders table - inspect created orders with the AWS CLI while testing"
+  value       = module.orders_table.table_name
+}
+
+output "orders_table_stream_arn" {
+  description = "Stream ARN of the Orders table - the EventBridge Pipe source in Milestone 4"
+  value       = module.orders_table.stream_arn
+}
+
+output "orders_lambda_function_name" {
+  description = "Name of the dev Orders Lambda - find its logs at /aws/lambda/<this name>"
+  value       = module.orders_lambda.function_name
+}
+
 output "api_endpoint" {
   description = "Base URL of the dev HTTP API - curl it to test, and the frontend's API base URL later"
   value       = module.api.api_endpoint
