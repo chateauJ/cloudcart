@@ -15,8 +15,17 @@ variable "integrations" {
 
 variable "routes" {
   type = map(object({
-    integration = string
+    integration            = string
+    authorization_required = optional(bool, false)
   }))
+}
+
+variable "jwt_authorizer" {
+  type = object({
+    issuer   = string,
+    audience = list(string)
+  })
+  default = null
 }
 
 variable "throttling_rate_limit" {

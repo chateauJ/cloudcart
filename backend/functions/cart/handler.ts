@@ -21,6 +21,9 @@ export async function handler(
   }
 
   const userId = getUserId(event);
+  if (!userId) {
+    return errorResponse(401, "UNAUTHORIZED", "Missing or invalid authentication");
+  }
 
   try {
     // 3 routes across 2 methods, so branch on the matched route rather than pathParameters

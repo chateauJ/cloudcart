@@ -100,6 +100,13 @@ module "orders_lambda" {
   ]
 }
 
+module "auth" {
+  source                    = "../../modules/cognito"
+  user_pool_name            = "${var.project_name}-${var.environment}-users"
+  enable_password_auth_flow = true
+  deletion_protection       = "INACTIVE"
+}
+
 module "api" {
   source             = "../../modules/api-gateway"
   api_name           = "${var.project_name}-${var.environment}-api"
@@ -121,11 +128,16 @@ module "api" {
   routes = {
     "GET /products"           = { integration = "products" }
     "GET /products/{id}"      = { integration = "products" } # {id} must match event.pathParameters.id in the handler
-    "GET /cart"               = { integration = "cart" }
-    "POST /cart/items"        = { integration = "cart" }
-    "DELETE /cart/items/{id}" = { integration = "cart" } # {id} here is a productId
-    "POST /orders"            = { integration = "orders" }
-    "GET /orders"             = { integration = "orders" }
-    "GET /orders/{id}"        = { integration = "orders" }
+    "GET /cart"               = { integration = "cart", authorization_required = true }
+    "POST /cart/items"        = { integration = "cart", authorization_required = true }
+    "DELETE /cart/items/{id}" = { integration = "cart", authorization_required = true } # {id} here is a productId
+    "POST /orders"            = { integration = "orders", authorization_required = true }
+    "GET /orders"             = { integration = "orders", authorization_required = true }
+    "GET /orders/{id}"        = { integration = "orders", authorization_required = true }
+  }
+
+  jwt_authorizer = {
+    issuer   = module.auth.issuer_url
+    audience = [module.auth.client_id]
   }
 }

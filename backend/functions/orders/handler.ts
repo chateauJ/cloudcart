@@ -29,6 +29,9 @@ export async function handler(
   }
 
   const userId = getUserId(event);
+  if (!userId) {
+    return errorResponse(401, "UNAUTHORIZED", "Missing or invalid authentication");
+  }
 
   try {
     switch (event.routeKey) {

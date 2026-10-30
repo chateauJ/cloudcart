@@ -38,6 +38,16 @@ output "orders_lambda_function_name" {
   value       = module.orders_lambda.function_name
 }
 
+output "cognito_user_pool_id" {
+  description = "Dev user pool ID - create test users with the AWS CLI, and the frontend's Cognito config later"
+  value       = module.auth.user_pool_id
+}
+
+output "cognito_client_id" {
+  description = "Dev app client ID - used to log in and get a token, and the frontend's Cognito config later"
+  value       = module.auth.client_id
+}
+
 output "api_endpoint" {
   description = "Base URL of the dev HTTP API - curl it to test, and the frontend's API base URL later"
   value       = module.api.api_endpoint
