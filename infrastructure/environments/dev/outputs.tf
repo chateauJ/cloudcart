@@ -48,6 +48,21 @@ output "cognito_client_id" {
   value       = module.auth.client_id
 }
 
+output "order_queue_url" {
+  description = "Dev order queue URL - receive OrderCreated messages with the AWS CLI while testing"
+  value       = module.order_queue.queue_url
+}
+
+output "order_dlq_url" {
+  description = "Dev order DLQ URL - check for messages that failed processing"
+  value       = module.order_queue.dlq_url
+}
+
+output "event_bus_name" {
+  description = "Dev custom event bus name"
+  value       = module.order_events.event_bus_name
+}
+
 output "api_endpoint" {
   description = "Base URL of the dev HTTP API - curl it to test, and the frontend's API base URL later"
   value       = module.api.api_endpoint

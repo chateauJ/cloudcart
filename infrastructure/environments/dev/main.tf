@@ -100,6 +100,19 @@ module "orders_lambda" {
   ]
 }
 
+module "order_queue" {
+  source     = "../../modules/sqs"
+  queue_name = "${var.project_name}-${var.environment}-order-queue"
+}
+
+module "order_events" {
+  source            = "../../modules/order-events"
+  name_prefix       = "${var.project_name}-${var.environment}"
+  orders_stream_arn = module.orders_table.stream_arn
+  order_queue_arn   = module.order_queue.queue_arn
+  order_queue_url   = module.order_queue.queue_url
+}
+
 module "auth" {
   source                    = "../../modules/cognito"
   user_pool_name            = "${var.project_name}-${var.environment}-users"
