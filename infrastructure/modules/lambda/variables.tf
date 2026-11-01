@@ -53,3 +53,8 @@ variable "dynamodb_access" {
   }))
   default = []
 }
+
+variable "sqs_event_source" {
+  type    = object({ queue_arn = string, batch_size = optional(number, 5) })
+  default = null
+}

@@ -113,6 +113,27 @@ module "order_events" {
   order_queue_url   = module.order_queue.queue_url
 }
 
+module "inventory_lambda" {
+  source        = "../../modules/lambda"
+  function_name = "${var.project_name}-${var.environment}-inventory"
+  dist_dir      = "${path.root}/../../../backend/dist/inventory"
+  environment_variables = {
+    ORDERS_TABLE_NAME   = module.orders_table.table_name
+    PRODUCTS_TABLE_NAME = module.products_table.table_name
+  }
+  dynamodb_access = [
+    {
+      actions       = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
+      resource_arns = [module.orders_table.table_arn]
+    },
+    {
+      actions       = ["dynamodb:UpdateItem"]
+      resource_arns = [module.products_table.table_arn]
+    }
+  ]
+  sqs_event_source = { queue_arn = module.order_queue.queue_arn }
+}
+
 module "auth" {
   source                    = "../../modules/cognito"
   user_pool_name            = "${var.project_name}-${var.environment}-users"

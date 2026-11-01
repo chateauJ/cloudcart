@@ -36,6 +36,11 @@ resource "aws_iam_role_policy" "this" {
           Resource = access.resource_arns
         }
       ],
+      var.sqs_event_source == null ? [] : [{
+        Effect   = "Allow"
+        Action   = ["sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"]
+        Resource = var.sqs_event_source.queue_arn
+      }],
       [
         {
           Effect   = "Allow"
@@ -72,4 +77,13 @@ resource "aws_lambda_function" "this" {
   }
 
   depends_on = [aws_cloudwatch_log_group.this]
+}
+
+resource "aws_lambda_event_source_mapping" "sqs" { # Lambda's poller reads the queue and invokes the function - no code polls SQS
+  count                   = var.sqs_event_source == null ? 0 : 1
+  event_source_arn        = var.sqs_event_source.queue_arn
+  function_name           = aws_lambda_function.this.arn
+  batch_size              = var.sqs_event_source.batch_size
+  function_response_types = ["ReportBatchItemFailures"]
+  depends_on              = [aws_iam_role_policy.this]
 }

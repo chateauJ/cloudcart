@@ -2,6 +2,10 @@ resource "aws_dynamodb_table_item" "prod_004" {
   table_name = module.products_table.table_name
   hash_key   = "productId"
 
+  lifecycle {
+    ignore_changes = [item]
+  }
+
   item = jsonencode({
     productId   = { S = "prod_004" }
     name        = { S = "Vantage Point Action Camera" }
@@ -16,6 +20,10 @@ resource "aws_dynamodb_table_item" "prod_010" {
   table_name = module.products_table.table_name
   hash_key   = "productId"
 
+  lifecycle {
+    ignore_changes = [item]
+  }
+
   item = jsonencode({
     productId   = { S = "prod_010" }
     name        = { S = "FastCharge 65W GaN Wall Charger" }
@@ -29,6 +37,10 @@ resource "aws_dynamodb_table_item" "prod_010" {
 resource "aws_dynamodb_table_item" "prod_005" {
   table_name = module.products_table.table_name
   hash_key   = "productId"
+
+  lifecycle {
+    ignore_changes = [item]
+  }
 
   item = jsonencode({
     productId   = { S = "prod_005" }

@@ -17,7 +17,9 @@ const ORDERS_USER_INDEX_NAME = process.env.ORDERS_USER_INDEX_NAME;
 const CARTS_TABLE_NAME = process.env.CARTS_TABLE_NAME;
 const PRODUCTS_TABLE_NAME = process.env.PRODUCTS_TABLE_NAME;
 
-const MAX_ORDER_LINES = 100; // BatchGetItem's per-request key limit
+// Inventory reserves every line plus the order status update in one transaction,
+// and DynamoDB transactions cap at 100 items - so 99 lines, not BatchGetItem's 100.
+const MAX_ORDER_LINES = 99;
 const ORDER_HISTORY_LIMIT = 50;
 
 export async function handler(

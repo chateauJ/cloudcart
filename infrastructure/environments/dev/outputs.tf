@@ -63,6 +63,11 @@ output "event_bus_name" {
   value       = module.order_events.event_bus_name
 }
 
+output "inventory_lambda_function_name" {
+  description = "Dev Inventory Lambda name - its logs show each order's processing outcome"
+  value       = module.inventory_lambda.function_name
+}
+
 output "api_endpoint" {
   description = "Base URL of the dev HTTP API - curl it to test, and the frontend's API base URL later"
   value       = module.api.api_endpoint

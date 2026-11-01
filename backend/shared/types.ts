@@ -34,4 +34,13 @@ export interface Order {
   items: OrderLineItem[];
   createdAt: string;
   updatedAt: string;
+  failureReason?: string; // set only when status is FAILED
+}
+
+// Shape of the Pipe's input_template output - the OrderCreated event's detail
+export interface OrderCreatedDetail {
+  orderId: string;
+  userId: string;
+  total: number;
+  createdAt: string;
 }
