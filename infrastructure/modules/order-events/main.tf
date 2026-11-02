@@ -67,12 +67,13 @@ resource "aws_pipes_pipe" "orders" { # stream -> bus with no code: OrderCreated 
     }
 
     # Becomes the event's detail. Heredoc, not jsonencode: it's only valid JSON after
-    # Pipes fills the <$.path> placeholders. total is unquoted so it lands as a number.
+    # Pipes fills the <$.path> placeholders. total stays a string: DynamoDB's N is a string
+    # in stream records, and Pipes quotes string values even when the template doesn't.
     input_template = <<-EOT
       {
         "orderId": "<$.dynamodb.NewImage.orderId.S>",
         "userId": "<$.dynamodb.NewImage.userId.S>",
-        "total": <$.dynamodb.NewImage.total.N>,
+        "total": "<$.dynamodb.NewImage.total.N>",
         "createdAt": "<$.dynamodb.NewImage.createdAt.S>"
       }
     EOT
@@ -110,6 +111,40 @@ resource "aws_sqs_queue_policy" "order_queue" { # resource-based policy: only th
       Resource  = var.order_queue_arn
       Condition = {
         ArnEquals = { "aws:SourceArn" = aws_cloudwatch_event_rule.order_created.arn }
+      }
+    }]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "order_created_notifications" { # one rule per consumer, so each can change its filter independently
+  name           = "${var.name_prefix}-order-created-notifications"
+  event_bus_name = aws_cloudwatch_event_bus.this.name
+
+  event_pattern = jsonencode({
+    source        = ["cloudcart.orders"]
+    "detail-type" = ["OrderCreated"]
+  })
+}
+
+resource "aws_cloudwatch_event_target" "notifications_topic" {
+  rule           = aws_cloudwatch_event_rule.order_created_notifications.name
+  event_bus_name = aws_cloudwatch_event_bus.this.name
+  target_id      = "notifications-topic"
+  arn            = var.notifications_topic_arn
+}
+
+resource "aws_sns_topic_policy" "notifications" { # replaces the topic's whole policy - keep it the only one for this topic
+  arn = var.notifications_topic_arn
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "events.amazonaws.com" }
+      Action    = "sns:Publish"
+      Resource  = var.notifications_topic_arn
+      Condition = {
+        ArnEquals = { "aws:SourceArn" = aws_cloudwatch_event_rule.order_created_notifications.arn }
       }
     }]
   })

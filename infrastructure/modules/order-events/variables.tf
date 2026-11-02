@@ -13,3 +13,7 @@ variable "order_queue_arn" {
 variable "order_queue_url" {
   type = string
 }
+
+variable "notifications_topic_arn" {
+  type = string
+}

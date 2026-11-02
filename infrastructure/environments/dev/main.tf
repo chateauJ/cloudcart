@@ -105,12 +105,25 @@ module "order_queue" {
   queue_name = "${var.project_name}-${var.environment}-order-queue"
 }
 
+module "notifications_lambda" {
+  source        = "../../modules/lambda"
+  function_name = "${var.project_name}-${var.environment}-notifications"
+  dist_dir      = "${path.root}/../../../backend/dist/notifications"
+}
+
+module "order_notifications_topic" {
+  source             = "../../modules/sns"
+  topic_name         = "${var.project_name}-${var.environment}-order-notifications"
+  lambda_subscribers = { notifications = module.notifications_lambda.function_arn }
+}
+
 module "order_events" {
-  source            = "../../modules/order-events"
-  name_prefix       = "${var.project_name}-${var.environment}"
-  orders_stream_arn = module.orders_table.stream_arn
-  order_queue_arn   = module.order_queue.queue_arn
-  order_queue_url   = module.order_queue.queue_url
+  source                  = "../../modules/order-events"
+  name_prefix             = "${var.project_name}-${var.environment}"
+  orders_stream_arn       = module.orders_table.stream_arn
+  order_queue_arn         = module.order_queue.queue_arn
+  order_queue_url         = module.order_queue.queue_url
+  notifications_topic_arn = module.order_notifications_topic.topic_arn
 }
 
 module "inventory_lambda" {

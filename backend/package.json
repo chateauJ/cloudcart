@@ -8,7 +8,8 @@
     "build:products": "esbuild functions/products/handler.ts --bundle --minify --platform=node --target=node20 --outfile=dist/products/index.js",
     "build:cart": "esbuild functions/cart/handler.ts --bundle --minify --platform=node --target=node20 --outfile=dist/cart/index.js",
     "build:orders": "esbuild functions/orders/handler.ts --bundle --minify --platform=node --target=node20 --outfile=dist/orders/index.js",
-    "build:inventory": "esbuild functions/inventory/handler.ts --bundle --minify --platform=node --target=node20 --outfile=dist/inventory/index.js"
+    "build:inventory": "esbuild functions/inventory/handler.ts --bundle --minify --platform=node --target=node20 --outfile=dist/inventory/index.js",
+    "build:notifications": "esbuild functions/notifications/handler.ts --bundle --minify --platform=node --target=node20 --outfile=dist/notifications/index.js"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.700.0",

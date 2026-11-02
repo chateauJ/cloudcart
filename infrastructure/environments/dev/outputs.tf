@@ -68,6 +68,16 @@ output "inventory_lambda_function_name" {
   value       = module.inventory_lambda.function_name
 }
 
+output "order_notifications_topic_arn" {
+  description = "Dev order notifications topic ARN - check its subscriptions with the AWS CLI"
+  value       = module.order_notifications_topic.topic_arn
+}
+
+output "notifications_lambda_function_name" {
+  description = "Dev Notifications Lambda name - its logs show one line per notified order"
+  value       = module.notifications_lambda.function_name
+}
+
 output "api_endpoint" {
   description = "Base URL of the dev HTTP API - curl it to test, and the frontend's API base URL later"
   value       = module.api.api_endpoint

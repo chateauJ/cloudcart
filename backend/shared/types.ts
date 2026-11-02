@@ -41,6 +41,6 @@ export interface Order {
 export interface OrderCreatedDetail {
   orderId: string;
   userId: string;
-  total: number;
+  total: string; // DynamoDB numbers are strings in stream records, and Pipes can't convert types
   createdAt: string;
 }
