@@ -82,3 +82,8 @@ output "api_endpoint" {
   description = "Base URL of the dev HTTP API - curl it to test, and the frontend's API base URL later"
   value       = module.api.api_endpoint
 }
+
+output "ops_alerts_topic_arn" {
+  description = "Dev ops alerts topic ARN - add more subscribers (Slack, PagerDuty) here later"
+  value       = module.monitoring.ops_alerts_topic_arn
+}

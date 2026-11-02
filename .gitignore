@@ -23,3 +23,6 @@ crash.*.log
 AGENTS.md
 CLAUDE.md
 
+
+# Per-developer Terraform values (e.g. alert email), auto-loaded but never committed
+local.auto.tfvars

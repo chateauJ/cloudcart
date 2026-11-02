@@ -19,3 +19,7 @@ variable "environment" {
     error_message = "Environment must be dev or prod."
   }
 }
+variable "alarm_email" {
+  type    = string
+  default = null
+}

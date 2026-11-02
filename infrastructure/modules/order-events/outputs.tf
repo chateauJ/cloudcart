@@ -17,3 +17,11 @@ output "order_created_rule_arn" {
   description = "ARN of the OrderCreated rule - scopes target permissions to this rule"
   value       = aws_cloudwatch_event_rule.order_created.arn
 }
+
+output "rule_names" {
+  description = "Rule names keyed by consumer - CloudWatch alarm dimensions"
+  value = {
+    order_queue   = aws_cloudwatch_event_rule.order_created.name
+    notifications = aws_cloudwatch_event_rule.order_created_notifications.name
+  }
+}

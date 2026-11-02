@@ -188,3 +188,22 @@ module "api" {
     audience = [module.auth.client_id]
   }
 }
+
+module "monitoring" {
+  source      = "../../modules/monitoring"
+  name_prefix = "${var.project_name}-${var.environment}"
+  alarm_email = var.alarm_email
+  lambda_function_names = {
+    products      = module.products_lambda.function_name
+    cart          = module.cart_lambda.function_name
+    orders        = module.orders_lambda.function_name
+    inventory     = module.inventory_lambda.function_name
+    notifications = module.notifications_lambda.function_name
+  }
+  api_id           = module.api.api_id
+  queue_name       = module.order_queue.queue_name
+  dlq_name         = module.order_queue.dlq_name
+  pipe_name        = module.order_events.pipe_name
+  event_bus_name   = module.order_events.event_bus_name
+  event_rule_names = module.order_events.rule_names
+}

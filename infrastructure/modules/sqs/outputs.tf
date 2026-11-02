@@ -22,3 +22,8 @@ output "dlq_name" {
   description = "Name of the dead-letter queue - CloudWatch alarm dimension (Milestone 5)"
   value       = aws_sqs_queue.dlq.name
 }
+
+output "queue_name" {
+  description = "Name of the main queue - CloudWatch alarm dimension"
+  value       = aws_sqs_queue.this.name
+}
