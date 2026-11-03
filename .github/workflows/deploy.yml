@@ -1,0 +1,130 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # rerun a deploy from the Actions tab without a new commit
+
+permissions:
+  contents: read
+
+concurrency:
+  # Deploys queue instead of cancelling: interrupting terraform apply can leave state locked mid-write
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24"
+  TERRAFORM_VERSION: "1.14.8"
+  AWS_REGION: us-east-1
+  TF_IN_AUTOMATION: "true" # trims terraform's "run this next" hints from the logs
+  TF_INPUT: "false" # fail on a missing variable instead of hanging on a prompt
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml # the same checks a PR ran, so main can't deploy what a PR wouldn't pass
+
+  deploy-dev:
+    name: Deploy dev
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: dev # the role's trust policy accepts this job's token only because of this line
+      url: ${{ steps.outputs.outputs.api_url }}
+    permissions:
+      contents: read
+      id-token: write # lets the job request the OIDC token it trades for AWS credentials
+    outputs:
+      api_url: ${{ steps.outputs.outputs.api_url }}
+      cognito_client_id: ${{ steps.outputs.outputs.cognito_client_id }}
+    env:
+      TF_VAR_alarm_email: ${{ secrets.ALARM_EMAIL }} # stands in for the gitignored local.auto.tfvars
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check required secrets
+        run: |
+          if [ -z "$TF_VAR_alarm_email" ]; then
+            echo "::error::Set the ALARM_EMAIL secret on the dev environment - without it this apply would delete the alarm email subscription"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Build Lambda bundles
+        working-directory: backend
+        run: |
+          npm ci
+          npm run build
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: deploy-dev-${{ github.run_id }} # shows up in CloudTrail, linking each change to its run
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform init
+        working-directory: infrastructure/environments/dev
+        run: terraform init
+
+      - name: terraform plan
+        working-directory: infrastructure/environments/dev
+        run: |
+          terraform plan -out=tfplan
+          {
+            echo "### Dev plan"
+            echo '```'
+            terraform show -no-color tfplan | grep -E '^  # |^Plan:|No changes' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Applies exactly the saved plan above - nothing that changed between plan and apply can sneak in
+      - name: terraform apply
+        working-directory: infrastructure/environments/dev
+        run: terraform apply tfplan
+
+      - name: Read outputs
+        id: outputs
+        working-directory: infrastructure/environments/dev
+        run: |
+          echo "api_url=$(terraform output -raw api_endpoint)" >> "$GITHUB_OUTPUT"
+          echo "cognito_client_id=$(terraform output -raw cognito_client_id)" >> "$GITHUB_OUTPUT"
+
+  smoke-test-dev:
+    name: Smoke test dev
+    needs: deploy-dev
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: dev # for the test user's password, an environment secret
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      # The golden path against what was just deployed - a green deploy means the app works, not just that apply exited 0
+      - run: npm run test:integration
+        env:
+          CLOUDCART_API_URL: ${{ needs.deploy-dev.outputs.api_url }}
+          CLOUDCART_COGNITO_CLIENT_ID: ${{ needs.deploy-dev.outputs.cognito_client_id }}
+          CLOUDCART_TEST_USERNAME: ${{ vars.CLOUDCART_TEST_USERNAME }}
+          CLOUDCART_TEST_PASSWORD: ${{ secrets.CLOUDCART_TEST_PASSWORD }}

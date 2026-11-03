@@ -123,6 +123,7 @@ resource "aws_iam_role_policy" "github_actions_iam" { # CI may manage app roles 
           "iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies",
           "iam:ListInstanceProfilesForRole", "iam:DeleteRole", "iam:DeleteRolePolicy",
           "iam:TagRole", "iam:UntagRole", "iam:UpdateRole", "iam:UpdateAssumeRolePolicy",
+          "iam:ListRoleTags",
         ]
         Resource = local.app_role_arns
       },
@@ -152,10 +153,10 @@ resource "aws_iam_role_policy" "github_actions_services" {
         Sid    = "AppResourcesByName"
         Effect = "Allow"
         Action = ["dynamodb:*", "sqs:*", "sns:*", "lambda:*", "events:*", "pipes:*", "logs:*", "cloudwatch:*"]
-        Resource = flatten([for p in local.app_prefixes : [
+        Resource = concat(flatten([for p in local.app_prefixes : [
           "${local.arn.dynamodb}:table/${p}-*", # also matches the table's /index/ and /stream/ ARNs
           "${local.arn.sqs}:${p}-*",
-          "${local.arn.sns}:${p}-*", # subscriptions are <topic ARN>:<id>, so this covers them too
+          "${local.arn.sns}:${p}-*", # topics; subscription reads only work on "*", see NoResourceLevelSupport
           "${local.arn.lambda}:function:${p}-*",
           "${local.arn.events}:event-bus/${p}-*",
           "${local.arn.events}:rule/${p}-*", # rules on a custom bus are rule/<bus>/<rule>
@@ -164,7 +165,9 @@ resource "aws_iam_role_policy" "github_actions_services" {
           "${local.arn.logs}:log-group:/aws/apigateway/${p}-*",
           "${local.arn.alarms}:alarm:${p}-*",
           "arn:aws:cloudwatch::${local.account_id}:dashboard/${p}", # dashboards are global and named exactly the prefix
-        ]])
+          ]]),
+          ["${local.arn.lambda}:event-source-mapping:*"], # mappings are named by generated UUIDs, so no prefix to match
+        )
       },
       {
         Sid    = "IdBasedServices" # these ARNs use generated IDs, not names, so scope to the account and region
@@ -189,6 +192,7 @@ resource "aws_iam_role_policy" "github_actions_services" {
           # API Gateway access logging delivers through these
           "logs:CreateLogDelivery", "logs:GetLogDelivery", "logs:UpdateLogDelivery", "logs:DeleteLogDelivery",
           "logs:ListLogDeliveries", "logs:PutResourcePolicy", "logs:DescribeResourcePolicies",
+          "sns:GetSubscriptionAttributes", "sns:SetSubscriptionAttributes", "sns:Unsubscribe",
         ]
         Resource = "*"
         Condition = {
