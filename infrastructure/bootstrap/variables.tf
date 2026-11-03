@@ -12,7 +12,7 @@ variable "project_name" {
 
 variable "github_repository" {
   type    = string
-  default = "chateauJ/cloudcart"
+  default = "chateauJ@102707406/cloudcart@1368975523"
 }
 
 variable "environments" {

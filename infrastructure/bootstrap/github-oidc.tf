@@ -15,7 +15,8 @@ resource "aws_iam_role" "github_actions" {
       Condition = {
         StringEquals = {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
-          # main-branch jobs and the dev/prod environment jobs only - pull requests never get AWS credentials
+          # main-branch jobs and the dev/prod environment jobs only - pull requests never get AWS credentials.
+          # The repo uses GitHub's immutable subject (owner@id/repo@id), so a recreated repo of the same name can't match.
           "token.actions.githubusercontent.com:sub" = concat(
             ["repo:${var.github_repository}:ref:refs/heads/main"],
             [for env in var.environments : "repo:${var.github_repository}:environment:${env}"],
