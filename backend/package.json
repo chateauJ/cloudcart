@@ -7,6 +7,7 @@
     "typecheck": "tsc --noEmit",
     "test": "jest",
     "test:coverage": "jest --coverage",
+    "test:integration": "jest --config jest.integration.config.js",
     "build:products": "esbuild functions/products/handler.ts --bundle --minify --platform=node --target=node20 --outfile=dist/products/index.js",
     "build:cart": "esbuild functions/cart/handler.ts --bundle --minify --platform=node --target=node20 --outfile=dist/cart/index.js",
     "build:orders": "esbuild functions/orders/handler.ts --bundle --minify --platform=node --target=node20 --outfile=dist/orders/index.js",

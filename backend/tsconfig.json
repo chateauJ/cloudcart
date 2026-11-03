@@ -12,5 +12,5 @@
     "noUnusedParameters": true,
     "types": ["node", "aws-lambda", "jest"]
   },
-  "include": ["functions/**/*.ts", "shared/**/*.ts", "test/**/*.ts"]
+  "include": ["functions/**/*.ts", "shared/**/*.ts", "test/**/*.ts", "integration/**/*.ts"]
 }
