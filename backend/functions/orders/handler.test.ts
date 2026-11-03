@@ -1,0 +1,229 @@
+import { TransactionCanceledException } from "@aws-sdk/client-dynamodb";
+import {
+  BatchGetCommand,
+  DynamoDBDocumentClient,
+  GetCommand,
+  QueryCommand,
+  TransactWriteCommand,
+} from "@aws-sdk/lib-dynamodb";
+import { mockClient } from "aws-sdk-client-mock";
+import { apiEvent, context, logLines, parseResponse, USER_ID } from "../../test/helpers";
+import { handler } from "./handler";
+
+const ddb = mockClient(DynamoDBDocumentClient);
+
+const CART_UPDATED_AT = "2026-11-01T00:00:00.000Z";
+const cart = {
+  userId: USER_ID,
+  items: [
+    { productId: "prod_001", quantity: 1 },
+    { productId: "prod_002", quantity: 1 },
+  ],
+  updatedAt: CART_UPDATED_AT,
+};
+// 0.1 + 0.2 is 0.30000000000000004 in floating point; the handler must still return 0.3
+const sticker = { productId: "prod_001", name: "Sticker", price: 0.1, inventory: 50 };
+const pin = { productId: "prod_002", name: "Pin", price: 0.2, inventory: 50 };
+
+const existingOrder = {
+  orderId: "order_1",
+  userId: USER_ID,
+  status: "COMPLETE",
+  total: 0.5,
+  items: [],
+  createdAt: CART_UPDATED_AT,
+  updatedAt: CART_UPDATED_AT,
+};
+
+function givenCart(value: object | undefined) {
+  ddb.on(GetCommand, { TableName: "carts-table" }).resolves({ Item: value });
+}
+
+function givenProducts(...products: object[]) {
+  ddb.on(BatchGetCommand).resolves({ Responses: { "products-table": products } });
+}
+
+function createOrder() {
+  return handler(apiEvent({ routeKey: "POST /orders", userId: USER_ID }), context);
+}
+
+function getOrder(orderId: string) {
+  return handler(apiEvent({ routeKey: "GET /orders/{id}", userId: USER_ID, pathParameters: { id: orderId } }), context);
+}
+
+beforeEach(() => ddb.reset());
+
+describe("orders handler", () => {
+  it("rejects a request without a verified user before touching DynamoDB", async () => {
+    const res = parseResponse(await handler(apiEvent({ routeKey: "POST /orders" }), context));
+
+    expect(res.statusCode).toBe(401);
+    expect(ddb.calls()).toHaveLength(0);
+  });
+
+  describe("POST /orders", () => {
+    it("creates a PENDING order and clears the cart in one transaction", async () => {
+      givenCart(cart);
+      givenProducts(sticker, pin);
+
+      const res = parseResponse(await createOrder());
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body).toMatchObject({
+        orderId: expect.stringMatching(/^order_[0-9a-f-]{36}$/),
+        userId: USER_ID,
+        status: "PENDING",
+        total: 0.3,
+        items: [
+          { productId: "prod_001", quantity: 1, unitPrice: 0.1 },
+          { productId: "prod_002", quantity: 1, unitPrice: 0.2 },
+        ],
+      });
+
+      const transaction = ddb.commandCalls(TransactWriteCommand)[0].args[0].input;
+      expect(transaction.TransactItems).toMatchObject([
+        {
+          Put: {
+            TableName: "orders-table",
+            Item: { orderId: res.body.orderId },
+            ConditionExpression: "attribute_not_exists(orderId)",
+          },
+        },
+        {
+          // The cart is deleted only if it's still the version that was priced
+          Delete: {
+            TableName: "carts-table",
+            Key: { userId: USER_ID },
+            ExpressionAttributeValues: { ":cartUpdatedAt": CART_UPDATED_AT },
+          },
+        },
+      ]);
+      expect(logLines()).toContainEqual(
+        expect.objectContaining({ message: "order created", orderId: res.body.orderId, total: 0.3, lineCount: 2 }),
+      );
+    });
+
+    it.each([
+      ["no cart", undefined],
+      ["an empty cart", { ...cart, items: [] }],
+    ])("rejects checkout with %s", async (_case, value) => {
+      givenCart(value);
+
+      const res = parseResponse(await createOrder());
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error.code).toBe("CART_EMPTY");
+      expect(ddb).not.toHaveReceivedCommand(TransactWriteCommand);
+    });
+
+    it("rejects a cart too large for the inventory transaction", async () => {
+      const items = Array.from({ length: 100 }, (_, index) => ({ productId: `prod_${index}`, quantity: 1 }));
+      givenCart({ ...cart, items });
+
+      const res = parseResponse(await createOrder());
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error.code).toBe("CART_TOO_LARGE");
+    });
+
+    it("rejects checkout when a product in the cart no longer exists", async () => {
+      givenCart(cart);
+      givenProducts(sticker);
+
+      const res = parseResponse(await createOrder());
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error.code).toBe("PRODUCT_NOT_FOUND");
+      expect(res.body.error.message).toContain("prod_002");
+      expect(ddb).not.toHaveReceivedCommand(TransactWriteCommand);
+    });
+
+    it("fails rather than pricing an order from a partial product read", async () => {
+      givenCart(cart);
+      ddb.on(BatchGetCommand).resolves({
+        Responses: { "products-table": [sticker] },
+        UnprocessedKeys: { "products-table": { Keys: [{ productId: "prod_002" }] } },
+      });
+
+      const res = parseResponse(await createOrder());
+
+      expect(res.statusCode).toBe(500);
+      expect(ddb).not.toHaveReceivedCommand(TransactWriteCommand);
+    });
+
+    it("returns 409 when the cart changed between pricing and checkout", async () => {
+      givenCart(cart);
+      givenProducts(sticker, pin);
+      ddb.on(TransactWriteCommand).rejects(
+        new TransactionCanceledException({
+          message: "Transaction cancelled",
+          $metadata: {},
+          CancellationReasons: [{ Code: "None" }, { Code: "ConditionalCheckFailed" }],
+        }),
+      );
+
+      const res = parseResponse(await createOrder());
+
+      expect(res.statusCode).toBe(409);
+      expect(res.body.error.code).toBe("CART_CONFLICT");
+      expect(logLines()).toContainEqual(
+        expect.objectContaining({ message: "checkout conflict", reasons: ["None", "ConditionalCheckFailed"] }),
+      );
+    });
+
+    it("returns a generic 500 when DynamoDB fails", async () => {
+      ddb.on(GetCommand).rejects(new Error("Service unavailable"));
+
+      const res = parseResponse(await createOrder());
+
+      expect(res.statusCode).toBe(500);
+      expect(res.body.error.code).toBe("INTERNAL_ERROR");
+    });
+  });
+
+  describe("GET /orders", () => {
+    it("lists the user's orders newest first from the user index", async () => {
+      ddb.on(QueryCommand).resolves({ Items: [existingOrder] });
+
+      const res = parseResponse(await handler(apiEvent({ routeKey: "GET /orders", userId: USER_ID }), context));
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toEqual([existingOrder]);
+      expect(ddb).toHaveReceivedCommandWith(QueryCommand, {
+        IndexName: "userId-createdAt-index",
+        ExpressionAttributeValues: { ":userId": USER_ID },
+        ScanIndexForward: false,
+        Limit: 50,
+      });
+    });
+  });
+
+  describe("GET /orders/{id}", () => {
+    it("returns the user's own order", async () => {
+      ddb.on(GetCommand, { TableName: "orders-table" }).resolves({ Item: existingOrder });
+
+      const res = parseResponse(await getOrder("order_1"));
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toEqual(existingOrder);
+    });
+
+    it("returns 404 for an order that doesn't exist", async () => {
+      ddb.on(GetCommand, { TableName: "orders-table" }).resolves({});
+
+      const res = parseResponse(await getOrder("order_missing"));
+
+      expect(res.statusCode).toBe(404);
+      expect(res.body.error.code).toBe("ORDER_NOT_FOUND");
+    });
+
+    it("returns the same 404 for another user's order, so order IDs can't be probed", async () => {
+      ddb.on(GetCommand, { TableName: "orders-table" }).resolves({ Item: { ...existingOrder, userId: "user-2" } });
+
+      const res = parseResponse(await getOrder("order_1"));
+
+      expect(res.statusCode).toBe(404);
+      expect(res.body.error.code).toBe("ORDER_NOT_FOUND");
+    });
+  });
+});

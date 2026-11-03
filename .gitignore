@@ -6,6 +6,7 @@ node_modules/
 
 # Backend Lambda build output (esbuild rebuilds this on demand, never commit it)
 backend/dist/
+backend/coverage/
 
 # Terraform working directories and state - .terraform.lock.hcl IS committed
 # (it pins provider versions), everything else here is local/sensitive/regenerable
