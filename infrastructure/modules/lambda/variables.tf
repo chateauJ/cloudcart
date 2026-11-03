@@ -67,3 +67,8 @@ variable "log_level" {
     error_message = "log_level must be one of DEBUG, INFO, WARN, ERROR."
   }
 }
+
+variable "permissions_boundary_arn" {
+  type    = string
+  default = null
+}

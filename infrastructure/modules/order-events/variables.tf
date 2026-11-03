@@ -17,3 +17,8 @@ variable "order_queue_url" {
 variable "notifications_topic_arn" {
   type = string
 }
+
+variable "permissions_boundary_arn" {
+  type    = string
+  default = null
+}

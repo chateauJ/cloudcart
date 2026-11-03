@@ -1,3 +1,5 @@
+data "aws_caller_identity" "current" {}
+
 module "products_table" {
   source        = "../../modules/dynamodb"
   table_name    = "${var.project_name}-${var.environment}-products"
@@ -5,9 +7,10 @@ module "products_table" {
 }
 
 module "products_lambda" {
-  source        = "../../modules/lambda"
-  function_name = "${var.project_name}-${var.environment}-products"
-  dist_dir      = "${path.root}/../../../backend/dist/products"
+  source                   = "../../modules/lambda"
+  function_name            = "${var.project_name}-${var.environment}-products"
+  dist_dir                 = "${path.root}/../../../backend/dist/products"
+  permissions_boundary_arn = local.permissions_boundary_arn
 
   environment_variables = {
     PRODUCTS_TABLE_NAME = module.products_table.table_name
@@ -28,9 +31,10 @@ module "carts_table" {
 }
 
 module "cart_lambda" {
-  source        = "../../modules/lambda"
-  function_name = "${var.project_name}-${var.environment}-cart"
-  dist_dir      = "${path.root}/../../../backend/dist/cart"
+  source                   = "../../modules/lambda"
+  function_name            = "${var.project_name}-${var.environment}-cart"
+  dist_dir                 = "${path.root}/../../../backend/dist/cart"
+  permissions_boundary_arn = local.permissions_boundary_arn
 
   environment_variables = {
     CARTS_TABLE_NAME    = module.carts_table.table_name
@@ -50,7 +54,8 @@ module "cart_lambda" {
 }
 
 locals {
-  orders_user_index_name = "userId-createdAt-index"
+  orders_user_index_name   = "userId-createdAt-index"
+  permissions_boundary_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:policy/${var.project_name}-workload-boundary"
 }
 
 module "orders_table" {
@@ -71,9 +76,10 @@ module "orders_table" {
 }
 
 module "orders_lambda" {
-  source        = "../../modules/lambda"
-  function_name = "${var.project_name}-${var.environment}-orders"
-  dist_dir      = "${path.root}/../../../backend/dist/orders"
+  source                   = "../../modules/lambda"
+  function_name            = "${var.project_name}-${var.environment}-orders"
+  dist_dir                 = "${path.root}/../../../backend/dist/orders"
+  permissions_boundary_arn = local.permissions_boundary_arn
   environment_variables = {
     ORDERS_TABLE_NAME      = module.orders_table.table_name
     ORDERS_USER_INDEX_NAME = local.orders_user_index_name
@@ -106,9 +112,10 @@ module "order_queue" {
 }
 
 module "notifications_lambda" {
-  source        = "../../modules/lambda"
-  function_name = "${var.project_name}-${var.environment}-notifications"
-  dist_dir      = "${path.root}/../../../backend/dist/notifications"
+  source                   = "../../modules/lambda"
+  function_name            = "${var.project_name}-${var.environment}-notifications"
+  dist_dir                 = "${path.root}/../../../backend/dist/notifications"
+  permissions_boundary_arn = local.permissions_boundary_arn
 }
 
 module "order_notifications_topic" {
@@ -118,18 +125,20 @@ module "order_notifications_topic" {
 }
 
 module "order_events" {
-  source                  = "../../modules/order-events"
-  name_prefix             = "${var.project_name}-${var.environment}"
-  orders_stream_arn       = module.orders_table.stream_arn
-  order_queue_arn         = module.order_queue.queue_arn
-  order_queue_url         = module.order_queue.queue_url
-  notifications_topic_arn = module.order_notifications_topic.topic_arn
+  source                   = "../../modules/order-events"
+  name_prefix              = "${var.project_name}-${var.environment}"
+  orders_stream_arn        = module.orders_table.stream_arn
+  order_queue_arn          = module.order_queue.queue_arn
+  order_queue_url          = module.order_queue.queue_url
+  notifications_topic_arn  = module.order_notifications_topic.topic_arn
+  permissions_boundary_arn = local.permissions_boundary_arn
 }
 
 module "inventory_lambda" {
-  source        = "../../modules/lambda"
-  function_name = "${var.project_name}-${var.environment}-inventory"
-  dist_dir      = "${path.root}/../../../backend/dist/inventory"
+  source                   = "../../modules/lambda"
+  function_name            = "${var.project_name}-${var.environment}-inventory"
+  dist_dir                 = "${path.root}/../../../backend/dist/inventory"
+  permissions_boundary_arn = local.permissions_boundary_arn
   environment_variables = {
     ORDERS_TABLE_NAME   = module.orders_table.table_name
     PRODUCTS_TABLE_NAME = module.products_table.table_name

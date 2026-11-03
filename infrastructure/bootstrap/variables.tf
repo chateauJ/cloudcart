@@ -9,3 +9,13 @@ variable "project_name" {
   type        = string
   default     = "cloudcart"
 }
+
+variable "github_repository" {
+  type    = string
+  default = "chateauJ/cloudcart"
+}
+
+variable "environments" {
+  type    = list(string)
+  default = ["dev", "prod"]
+}

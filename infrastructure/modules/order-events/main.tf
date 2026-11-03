@@ -12,7 +12,8 @@ resource "aws_cloudwatch_event_bus" "this" { # custom bus keeps app events separ
 }
 
 resource "aws_iam_role" "pipe" {
-  name = "${var.name_prefix}-orders-pipe-role"
+  name                 = "${var.name_prefix}-orders-pipe-role"
+  permissions_boundary = var.permissions_boundary_arn
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
