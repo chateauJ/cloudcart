@@ -1,3 +1,12 @@
+data "aws_caller_identity" "current" {}
+
+data "aws_region" "current" {}
+
+locals { # the pipe's ARN is built from its name, so the role's trust policy can name it without a dependency cycle
+  pipe_name = "${var.name_prefix}-orders-pipe"
+  pipe_arn  = "arn:aws:pipes:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:pipe/${local.pipe_name}"
+}
+
 resource "aws_cloudwatch_event_bus" "this" { # custom bus keeps app events separate from AWS's default bus
   name = "${var.name_prefix}-events"
 }
@@ -11,6 +20,10 @@ resource "aws_iam_role" "pipe" {
       Effect    = "Allow"
       Principal = { Service = "pipes.amazonaws.com" } # the Pipes service assumes this role, not Lambda
       Action    = "sts:AssumeRole"
+      Condition = {
+        StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
+        ArnEquals    = { "aws:SourceArn" = local.pipe_arn }
+      }
     }]
   })
 }
@@ -42,7 +55,7 @@ resource "aws_iam_role_policy" "pipe" {
 }
 
 resource "aws_pipes_pipe" "orders" { # stream -> bus with no code: OrderCreated fires iff the order write committed (spec.md §4)
-  name     = "${var.name_prefix}-orders-pipe"
+  name     = local.pipe_name
   role_arn = aws_iam_role.pipe.arn
   source   = var.orders_stream_arn
   target   = aws_cloudwatch_event_bus.this.arn

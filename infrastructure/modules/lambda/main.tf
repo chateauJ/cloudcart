@@ -44,13 +44,13 @@ resource "aws_iam_role_policy" "this" {
       [
         {
           Effect   = "Allow"
-          Action   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+          Action   = ["logs:CreateLogStream", "logs:PutLogEvents"]
           Resource = "${aws_cloudwatch_log_group.this.arn}:*"
         },
         {
           Effect   = "Allow"
           Action   = ["xray:PutTraceSegments", "xray:PutTelemetryRecords"]
-          Resource = "*"
+          Resource = "*" # X-Ray actions don't support resource-level permissions
         },
       ]
     )
