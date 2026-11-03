@@ -1,15 +1,19 @@
-import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from "aws-lambda";
+import { APIGatewayProxyEventV2, APIGatewayProxyResultV2, Context } from "aws-lambda";
 import { GetCommand, ScanCommand } from "@aws-sdk/lib-dynamodb";
 import { docClient } from "../../shared/dynamodb";
 import { errorResponse, jsonResponse } from "../../shared/responses";
+import { createLogger } from "../../shared/logger";
 
 const TABLE_NAME = process.env.PRODUCTS_TABLE_NAME;
 
 export async function handler(
   event: APIGatewayProxyEventV2,
+  context: Context,
 ): Promise<APIGatewayProxyResultV2> {
+  const log = createLogger(context, { route: event.routeKey });
+
   if (!TABLE_NAME) {
-    console.error("PRODUCTS_TABLE_NAME environment variable is not set");
+    log.error("PRODUCTS_TABLE_NAME environment variable is not set");
     return errorResponse(500, "CONFIGURATION_ERROR", "Server is misconfigured");
   }
 
@@ -17,7 +21,7 @@ export async function handler(
     const productId = event.pathParameters?.id;
     return productId ? await getProduct(TABLE_NAME, productId) : await listProducts(TABLE_NAME);
   } catch (err) {
-    console.error("products handler failed", err);
+    log.error("products handler failed", { error: err });
     return errorResponse(500, "INTERNAL_ERROR", "Something went wrong while processing the request");
   }
 }

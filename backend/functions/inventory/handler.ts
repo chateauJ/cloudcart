@@ -1,10 +1,11 @@
-import { SQSBatchItemFailure, SQSBatchResponse, SQSEvent, SQSRecord } from "aws-lambda";
+import { Context, SQSBatchItemFailure, SQSBatchResponse, SQSEvent, SQSRecord } from "aws-lambda";
 import { GetCommand, TransactWriteCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import {
   ConditionalCheckFailedException,
   TransactionCanceledException,
 } from "@aws-sdk/client-dynamodb";
 import { docClient } from "../../shared/dynamodb";
+import { createLogger } from "../../shared/logger";
 import { Order, OrderCreatedDetail } from "../../shared/types";
 
 const ORDERS_TABLE_NAME = process.env.ORDERS_TABLE_NAME;
@@ -14,7 +15,9 @@ type Outcome = "COMPLETED" | "FAILED_INSUFFICIENT_INVENTORY" | "ALREADY_PROCESSE
 
 // Partial batch response: only the records listed here go back to the queue for retry
 // (and eventually the DLQ). Every other record in the batch is deleted as done.
-export async function handler(event: SQSEvent): Promise<SQSBatchResponse> {
+export async function handler(event: SQSEvent, context: Context): Promise<SQSBatchResponse> {
+  const log = createLogger(context, { batchSize: event.Records.length });
+
   if (!ORDERS_TABLE_NAME || !PRODUCTS_TABLE_NAME) {
     // Throwing fails the whole batch, so nothing is lost while the config is broken
     throw new Error("ORDERS_TABLE_NAME or PRODUCTS_TABLE_NAME environment variable is not set");
@@ -23,12 +26,14 @@ export async function handler(event: SQSEvent): Promise<SQSBatchResponse> {
   const batchItemFailures: SQSBatchItemFailure[] = [];
 
   for (const record of event.Records) {
+    let recordLog = log.child({ messageId: record.messageId });
     try {
       const orderId = parseOrderId(record);
+      recordLog = recordLog.child({ orderId });
       const outcome = await processOrder(orderId);
-      console.log(JSON.stringify({ message: "order processed", orderId, outcome }));
+      recordLog.info("order processed", { outcome });
     } catch (err) {
-      console.error(JSON.stringify({ message: "order processing failed", messageId: record.messageId, error: String(err) }));
+      recordLog.error("order processing failed", { error: err });
       batchItemFailures.push({ itemIdentifier: record.messageId });
     }
   }

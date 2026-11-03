@@ -58,3 +58,12 @@ variable "sqs_event_source" {
   type    = object({ queue_arn = string, batch_size = optional(number, 5) })
   default = null
 }
+
+variable "log_level" {
+  type    = string
+  default = "INFO"
+  validation {
+    condition     = contains(["DEBUG", "INFO", "WARN", "ERROR"], var.log_level)
+    error_message = "log_level must be one of DEBUG, INFO, WARN, ERROR."
+  }
+}

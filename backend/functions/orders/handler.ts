@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from "aws-lambda";
+import { APIGatewayProxyEventV2, APIGatewayProxyResultV2, Context } from "aws-lambda";
 import {
   BatchGetCommand,
   GetCommand,
@@ -10,6 +10,7 @@ import { TransactionCanceledException } from "@aws-sdk/client-dynamodb";
 import { docClient } from "../../shared/dynamodb";
 import { errorResponse, jsonResponse } from "../../shared/responses";
 import { getUserId } from "../../shared/auth";
+import { createLogger, Logger } from "../../shared/logger";
 import { Cart, Order, OrderLineItem, Product } from "../../shared/types";
 
 const ORDERS_TABLE_NAME = process.env.ORDERS_TABLE_NAME;
@@ -24,9 +25,12 @@ const ORDER_HISTORY_LIMIT = 50;
 
 export async function handler(
   event: APIGatewayProxyEventV2,
+  context: Context,
 ): Promise<APIGatewayProxyResultV2> {
+  let log = createLogger(context, { route: event.routeKey });
+
   if (!ORDERS_TABLE_NAME || !ORDERS_USER_INDEX_NAME || !CARTS_TABLE_NAME || !PRODUCTS_TABLE_NAME) {
-    console.error("One or more required table/index environment variables are not set");
+    log.error("One or more required table/index environment variables are not set");
     return errorResponse(500, "CONFIGURATION_ERROR", "Server is misconfigured");
   }
 
@@ -34,11 +38,12 @@ export async function handler(
   if (!userId) {
     return errorResponse(401, "UNAUTHORIZED", "Missing or invalid authentication");
   }
+  log = log.child({ userId });
 
   try {
     switch (event.routeKey) {
       case "POST /orders":
-        return await createOrder(userId);
+        return await createOrder(userId, log);
       case "GET /orders":
         return await listOrders(userId);
       case "GET /orders/{id}": {
@@ -55,14 +60,15 @@ export async function handler(
     // A failed condition inside a transaction surfaces as TransactionCanceledException,
     // not ConditionalCheckFailedException - here it means the cart changed mid-checkout.
     if (err instanceof TransactionCanceledException) {
+      log.warn("checkout conflict", { reasons: err.CancellationReasons?.map((reason) => reason.Code) });
       return errorResponse(409, "CART_CONFLICT", "Cart changed during checkout; review it and retry");
     }
-    console.error("orders handler failed", err);
+    log.error("orders handler failed", { error: err });
     return errorResponse(500, "INTERNAL_ERROR", "Something went wrong while processing the request");
   }
 }
 
-async function createOrder(userId: string): Promise<APIGatewayProxyResultV2> {
+async function createOrder(userId: string, log: Logger): Promise<APIGatewayProxyResultV2> {
   const cartResult = await docClient.send(
     new GetCommand({ TableName: CARTS_TABLE_NAME, Key: { userId } }),
   );
@@ -126,6 +132,7 @@ async function createOrder(userId: string): Promise<APIGatewayProxyResultV2> {
     }),
   );
 
+  log.info("order created", { orderId: order.orderId, total: order.total, lineCount: items.length });
   return jsonResponse(201, order);
 }
 

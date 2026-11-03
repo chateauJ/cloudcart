@@ -69,7 +69,7 @@ resource "aws_lambda_function" "this" {
   source_code_hash = data.archive_file.this.output_base64sha256
 
   environment {
-    variables = var.environment_variables
+    variables = merge(var.environment_variables, { LOG_LEVEL = var.log_level })
   }
 
   tracing_config {

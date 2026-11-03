@@ -1,9 +1,10 @@
-import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from "aws-lambda";
+import { APIGatewayProxyEventV2, APIGatewayProxyResultV2, Context } from "aws-lambda";
 import { GetCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
 import { docClient } from "../../shared/dynamodb";
 import { errorResponse, jsonResponse } from "../../shared/responses";
 import { getUserId } from "../../shared/auth";
+import { createLogger } from "../../shared/logger";
 import { parseJsonBody } from "../../shared/request";
 import { Cart } from "../../shared/types";
 
@@ -14,9 +15,12 @@ const MAX_QUANTITY_PER_ADD = 99;
 
 export async function handler(
   event: APIGatewayProxyEventV2,
+  context: Context,
 ): Promise<APIGatewayProxyResultV2> {
+  let log = createLogger(context, { route: event.routeKey });
+
   if (!CARTS_TABLE_NAME || !PRODUCTS_TABLE_NAME) {
-    console.error("CARTS_TABLE_NAME or PRODUCTS_TABLE_NAME environment variable is not set");
+    log.error("CARTS_TABLE_NAME or PRODUCTS_TABLE_NAME environment variable is not set");
     return errorResponse(500, "CONFIGURATION_ERROR", "Server is misconfigured");
   }
 
@@ -24,6 +28,7 @@ export async function handler(
   if (!userId) {
     return errorResponse(401, "UNAUTHORIZED", "Missing or invalid authentication");
   }
+  log = log.child({ userId });
 
   try {
     // 3 routes across 2 methods, so branch on the matched route rather than pathParameters
@@ -45,9 +50,10 @@ export async function handler(
   } catch (err) {
     // Raised by saveCart when another request changed the cart between our read and write
     if (err instanceof ConditionalCheckFailedException) {
+      log.warn("cart write conflict");
       return errorResponse(409, "CART_CONFLICT", "Cart was modified by another request; retry");
     }
-    console.error("cart handler failed", err);
+    log.error("cart handler failed", { error: err });
     return errorResponse(500, "INTERNAL_ERROR", "Something went wrong while processing the request");
   }
 }
