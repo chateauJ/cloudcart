@@ -2,7 +2,7 @@ data "aws_region" "current" { # the provider's region, so widgets don't hardcode
 }
 
 locals {
-  region = data.aws_region.current.name
+  region = data.aws_region.current.region
 
   alarm_arns = concat(
     [for alarm in aws_cloudwatch_metric_alarm.lambda_errors : alarm.arn], # for_each resources are maps of instances

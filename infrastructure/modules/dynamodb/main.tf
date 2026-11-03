@@ -31,9 +31,20 @@ resource "aws_dynamodb_table" "this" {
     for_each = var.global_secondary_indexes
     content {
       name            = global_secondary_index.value.name
-      hash_key        = global_secondary_index.value.hash_key
-      range_key       = global_secondary_index.value.range_key
       projection_type = global_secondary_index.value.projection_type
+
+      key_schema { # provider 6.x replaces the GSI's hash_key/range_key with key_schema blocks
+        attribute_name = global_secondary_index.value.hash_key
+        key_type       = "HASH"
+      }
+
+      dynamic "key_schema" { # the sort key is optional, so zero or one block
+        for_each = global_secondary_index.value.range_key == null ? [] : [global_secondary_index.value.range_key]
+        content {
+          attribute_name = key_schema.value
+          key_type       = "RANGE"
+        }
+      }
     }
   }
 }

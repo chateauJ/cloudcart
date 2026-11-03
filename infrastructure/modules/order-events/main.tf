@@ -4,7 +4,7 @@ data "aws_region" "current" {}
 
 locals { # the pipe's ARN is built from its name, so the role's trust policy can name it without a dependency cycle
   pipe_name = "${var.name_prefix}-orders-pipe"
-  pipe_arn  = "arn:aws:pipes:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:pipe/${local.pipe_name}"
+  pipe_arn  = "arn:aws:pipes:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:pipe/${local.pipe_name}"
 }
 
 resource "aws_cloudwatch_event_bus" "this" { # custom bus keeps app events separate from AWS's default bus
