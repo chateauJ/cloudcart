@@ -1,7 +1,8 @@
 data "archive_file" "this" {
-  type        = "zip"
-  source_dir  = var.dist_dir
-  output_path = "${var.dist_dir}.zip"
+  type             = "zip"
+  source_dir       = var.dist_dir
+  output_path      = "${var.dist_dir}.zip"
+  output_file_mode = "0666"
 }
 
 resource "aws_iam_role" "this" {
