@@ -87,3 +87,8 @@ output "ops_alerts_topic_arn" {
   description = "Dev ops alerts topic ARN - add more subscribers (Slack, PagerDuty) here later"
   value       = module.monitoring.ops_alerts_topic_arn
 }
+
+output "dashboard_url" {
+  description = "Dev CloudWatch dashboard - open it in a browser"
+  value       = module.monitoring.dashboard_url
+}

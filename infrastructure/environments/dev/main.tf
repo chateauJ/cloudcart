@@ -206,4 +206,9 @@ module "monitoring" {
   pipe_name        = module.order_events.pipe_name
   event_bus_name   = module.order_events.event_bus_name
   event_rule_names = module.order_events.rule_names
+  dynamodb_table_names = {
+    products = module.products_table.table_name
+    carts    = module.carts_table.table_name
+    orders   = module.orders_table.table_name
+  }
 }

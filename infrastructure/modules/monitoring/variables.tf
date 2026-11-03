@@ -54,3 +54,7 @@ variable "event_bus_name" {
 variable "event_rule_names" {
   type = map(string)
 }
+
+variable "dynamodb_table_names" {
+  type = map(string)
+}
