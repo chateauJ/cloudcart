@@ -15,8 +15,8 @@ A serverless, event-driven e-commerce backend on AWS. Every resource is defined 
 | Integration test suite against the deployed API | Done |
 | CI on pull requests, deploy to dev on merge to `main` | Done |
 | Shared `app` module wiring each environment | Done |
-| **prod environment** and the approval-gated prod stages of the deploy pipeline | **In progress** |
-| Frontend wired to the real API and Cognito | Not started (it uses local mock data today) |
+| prod environment and the approval-gated prod stages of the deploy pipeline | Done |
+| Frontend wired to the real API and Cognito, with a seeded 12-product catalog | Done |
 
 ## Architecture
 
@@ -39,6 +39,37 @@ flowchart LR
 **Request path.** API Gateway's built-in JWT authorizer validates Cognito tokens, so there is no custom authorizer Lambda. Handlers take the user ID from the token's `sub` claim and never from the request body.
 
 **Order path.** The orders Lambda writes the order and nothing else. A DynamoDB Stream on the orders table feeds an EventBridge Pipe, which publishes `OrderCreated` to a custom bus. Two rules fan that event out: one to SQS for the inventory Lambda, one to SNS for the notifications Lambda.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Browser
+    participant API as API Gateway
+    participant O as orders λ
+    participant DB as DynamoDB
+    participant EB as Pipe and EventBridge
+    participant Q as SQS
+    participant I as inventory λ
+    B->>API: POST /orders with Cognito access token
+    API->>O: invoke after the JWT authorizer passes
+    O->>DB: one transaction - put order (PENDING), delete cart
+    O-->>B: 201 Created, status PENDING
+    DB-->>EB: stream INSERT becomes OrderCreated
+    EB->>Q: rule delivers to the order queue
+    Q->>I: batch of messages
+    I->>DB: one transaction - decrement stock, order PENDING to COMPLETE
+    loop every 1.5 s until the order settles
+        B->>API: GET /orders/{id}
+    end
+```
+
+The API answers checkout before inventory is reserved, so a slow or failing inventory step never blocks the customer. If stock ran out, the inventory Lambda marks the order `FAILED` with a reason instead.
+
+### Screenshots
+
+| Product catalog (12 products, seeded by Terraform) | Product page |
+| --- | --- |
+| ![Product grid](docs/screenshots/products.png) | ![Product page](docs/screenshots/product-detail.png) |
 
 ### Key design decisions
 
@@ -98,8 +129,9 @@ infrastructure/
     api-gateway/ cognito/ dynamodb/ lambda/ order-events/ sqs/ sns/ monitoring/
   environments/
     dev/                        # root module + state for dev
-    prod/                       # root module + state for prod (in progress)
-frontend/                       # Next.js demo storefront (mock data layer today)
+    prod/                       # root module + state for prod
+frontend/                       # Next.js demo storefront: real API + Cognito (SRP) sign-in
+docs/screenshots/               # images used in this README
 .github/
   workflows/test.yml            # PR checks, also reused by deploy.yml
   workflows/deploy.yml          # main → dev → smoke test → prod plan → approval → prod
@@ -165,10 +197,11 @@ npm run test:integration
 ```bash
 cd frontend
 npm ci
+npm run env:dev   # writes .env.local from the dev Terraform outputs
 npm run dev
 ```
 
-Open http://localhost:3000. The storefront currently uses a local mock data layer (`frontend/lib/api.ts`) and mock auth, so it runs without the backend.
+Open http://localhost:3000 (the API's CORS setting only allows this origin). Sign up with a real email address: Cognito emails a confirmation code, and sign-in then uses SRP, so the password never leaves the browser. See [`frontend/README.md`](frontend/README.md) for how the client maps to the API.
 
 ## CI/CD
 
@@ -177,6 +210,14 @@ Open http://localhost:3000. The storefront currently uses a local mock data laye
 - Backend: `tsc --noEmit`, Jest with coverage, then an esbuild build of every Lambda
 - Frontend: ESLint
 - Terraform: `fmt -check`, `tflint --recursive`, and `validate` for `bootstrap`, `dev` and `prod`
+
+```mermaid
+flowchart LR
+    pr[Pull request] --> checks[test.yml: 6 required checks]
+    checks -->|rebase and merge| main[push to main]
+    main --> rerun[test.yml again] --> dev[Deploy dev] --> smokedev[Smoke test dev]
+    smokedev --> plan[Plan prod] --> gate{{Required reviewer approves}} --> prod[Deploy prod] --> smokeprod[Smoke test prod]
+```
 
 **`deploy.yml`** runs on push to `main`:
 
@@ -215,7 +256,7 @@ Alarms publish to a `cloudcart-<env>-ops-alerts` SNS topic, which is separate fr
 | Pipe `ExecutionFailed` | Orders are being written but their events aren't being published |
 | Rule `FailedInvocations` | EventBridge couldn't deliver to SQS or SNS |
 
-A CloudWatch dashboard (`terraform output dashboard_url`) charts these metrics plus DynamoDB consumed capacity. There are four saved Logs Insights queries: `errors`, `order-timeline`, `inventory-outcomes` and `lambda-performance`. Every Lambda writes structured JSON logs with `requestId`, `userId` and `orderId`/`productId`. X-Ray active tracing is on for every Lambda, and the DynamoDB client is instrumented so each table call appears as its own subsegment.
+A CloudWatch dashboard (`terraform output dashboard_url`) charts these metrics plus DynamoDB consumed capacity. There are four saved Logs Insights queries: `errors`, `order-timeline`, `inventory-outcomes` and `lambda-performance`. Every Lambda writes one JSON object per log line with `requestId`, `traceId` and `coldStart`, plus `userId` and `orderId` where they're known, so one Logs Insights query can follow an order across three functions. X-Ray active tracing is on for every Lambda, and the DynamoDB client is instrumented so each table call appears as its own subsegment.
 
 ## Cost
 

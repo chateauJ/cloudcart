@@ -12,7 +12,10 @@ export default async function ProductsPage(props: PageProps<"/products">) {
   const category = typeof searchParams.category === "string" ? searchParams.category : "";
 
   // Fetched on the server for every request, so stock levels are current
-  const products = (await listProducts()).filter((p) => !category || p.category === category);
+  const products = (await listProducts())
+    .filter((p) => !category || p.category === category)
+    // Scan returns items in hash order, which reshuffles as the catalog changes - sort for a stable grid
+    .sort((a, b) => a.category.localeCompare(b.category) || a.productId.localeCompare(b.productId));
 
   return (
     <div>
