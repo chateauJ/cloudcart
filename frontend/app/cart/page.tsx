@@ -1,28 +1,66 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { useCart } from "@/lib/CartContext";
-import { getProductById } from "@/lib/products";
+import { useCatalog } from "@/lib/CatalogContext";
+
+// Commits on blur or Enter rather than every keystroke - typing "12" would otherwise send
+// one request for 1 and another for 12
+function QuantityInput({
+  value,
+  max,
+  onCommit,
+}: {
+  value: number;
+  max: number;
+  onCommit: (quantity: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+
+  useEffect(() => {
+    // Show the server's quantity again after each change round-trips
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setDraft(String(value));
+  }, [value]);
+
+  function commit() {
+    const next = Math.max(1, Math.min(max, Math.floor(Number(draft)) || 1));
+    setDraft(String(next));
+    if (next !== value) onCommit(next);
+  }
+
+  return (
+    <input
+      type="number"
+      min={1}
+      max={max}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => e.key === "Enter" && commit()}
+      className="w-16 rounded-md border border-foreground/15 px-2 py-1.5 text-sm"
+    />
+  );
+}
 
 export default function CartPage() {
   const { user, isLoading } = useAuth();
-  const { cart, updateItem, removeItem } = useCart();
+  const { cart, error, updateItem, removeItem } = useCart();
+  const { productById, isLoading: catalogLoading } = useCatalog();
   const router = useRouter();
 
   useEffect(() => {
     if (!isLoading && !user) router.push("/login");
   }, [isLoading, user, router]);
 
-  if (isLoading || !user) return null;
+  if (isLoading || !user || !cart || catalogLoading) return null;
 
-  const lines = (cart?.items ?? [])
-    .map((item) => ({ item, product: getProductById(item.productId) }))
-    .filter((l) => l.product);
-
-  const subtotal = lines.reduce((sum, l) => sum + l.product!.price * l.item.quantity, 0);
+  // A product removed from the catalog still shows, by ID, so it can be taken out of the cart
+  const lines = cart.items.map((item) => ({ item, product: productById(item.productId) }));
+  const subtotal = lines.reduce((sum, l) => sum + (l.product?.price ?? 0) * l.item.quantity, 0);
 
   if (lines.length === 0) {
     return (
@@ -42,29 +80,29 @@ export default function CartPage() {
   return (
     <div>
       <h1 className="text-2xl font-semibold">Your cart</h1>
+      {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
 
       <div className="mt-6 divide-y divide-foreground/10">
         {lines.map(({ item, product }) => (
           <div key={item.productId} className="flex items-center gap-4 py-4">
             <div className="flex h-16 w-16 flex-shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-foreground/5 to-foreground/10 text-xl font-semibold text-foreground/30">
-              {product!.name.charAt(0)}
+              {(product?.name ?? "?").charAt(0)}
             </div>
             <div className="flex-1">
               <Link href={`/products/${item.productId}`} className="font-medium hover:underline">
-                {product!.name}
+                {product?.name ?? item.productId}
               </Link>
-              <p className="text-sm text-foreground/50">${product!.price.toFixed(2)} each</p>
+              <p className="text-sm text-foreground/50">
+                {product ? `$${product.price.toFixed(2)} each` : "No longer available"}
+              </p>
             </div>
-            <input
-              type="number"
-              min={1}
-              max={product!.inventory}
+            <QuantityInput
               value={item.quantity}
-              onChange={(e) => updateItem(item.productId, Number(e.target.value))}
-              className="w-16 rounded-md border border-foreground/15 px-2 py-1.5 text-sm"
+              max={Math.min(99, product?.inventory ?? item.quantity)}
+              onCommit={(quantity) => updateItem(item.productId, quantity)}
             />
             <span className="w-20 text-right font-medium">
-              ${(product!.price * item.quantity).toFixed(2)}
+              ${((product?.price ?? 0) * item.quantity).toFixed(2)}
             </span>
             <button
               onClick={() => removeItem(item.productId)}

@@ -1,8 +1,7 @@
 "use client";
 
-// Client-side cache of the cart so the navbar badge and /cart page stay in
-// sync without prop drilling. Source of truth is still lib/api.ts (localStorage
-// today, the real Cart API in spec.md §12 later).
+// Client-side copy of the signed-in user's cart, so the navbar badge and /cart page stay in sync.
+// The Cart API is the source of truth: every change sends a request and stores the cart it returns.
 
 import { createContext, useCallback, useContext, useEffect, useState, ReactNode } from "react";
 import * as api from "./api";
@@ -12,10 +11,12 @@ import { Cart } from "./types";
 interface CartContextValue {
   cart: Cart | null;
   itemCount: number;
+  error: string | null;
   refresh: () => Promise<void>;
-  addItem: (productId: string, quantity: number) => Promise<void>;
-  updateItem: (productId: string, quantity: number) => Promise<void>;
-  removeItem: (productId: string) => Promise<void>;
+  // Each returns false if the request failed; the message is in `error`
+  addItem: (productId: string, quantity: number) => Promise<boolean>;
+  updateItem: (productId: string, quantity: number) => Promise<boolean>;
+  removeItem: (productId: string) => Promise<boolean>;
 }
 
 const CartContext = createContext<CartContextValue | undefined>(undefined);
@@ -23,41 +24,65 @@ const CartContext = createContext<CartContextValue | undefined>(undefined);
 export function CartProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const [cart, setCart] = useState<Cart | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!user) {
       setCart(null);
       return;
     }
-    setCart(await api.getCart(user.userId));
+    try {
+      setCart(await api.getCart());
+    } catch (err) {
+      setError(api.errorMessage(err, "Could not load your cart"));
+    }
   }, [user]);
 
   useEffect(() => {
-    // Re-sync the cart (from localStorage, later the real Cart API) whenever
-    // the logged-in user changes - an external-system sync, not derived state.
+    // Re-fetch the cart whenever the signed-in user changes - an external-system sync
     // eslint-disable-next-line react-hooks/set-state-in-effect
     refresh();
   }, [refresh]);
 
-  async function addItem(productId: string, quantity: number) {
-    if (!user) return;
-    setCart(await api.addToCart(user.userId, productId, quantity));
+  async function run(change: () => Promise<Cart>): Promise<boolean> {
+    if (!user) return false;
+    setError(null);
+    try {
+      setCart(await change());
+      return true;
+    } catch (err) {
+      setError(api.errorMessage(err));
+      await refresh(); // show what the server actually has after a failed change
+      return false;
+    }
   }
 
-  async function updateItem(productId: string, quantity: number) {
-    if (!user) return;
-    setCart(await api.updateCartItemQuantity(user.userId, productId, quantity));
+  function addItem(productId: string, quantity: number) {
+    return run(() => api.addToCart(productId, quantity));
   }
 
-  async function removeItem(productId: string) {
-    if (!user) return;
-    setCart(await api.removeFromCart(user.userId, productId));
+  function updateItem(productId: string, quantity: number) {
+    const current = cart?.items.find((i) => i.productId === productId)?.quantity ?? 0;
+    if (quantity <= 0) return removeItem(productId);
+    if (quantity > current) return run(() => api.addToCart(productId, quantity - current));
+    if (quantity === current) return Promise.resolve(true);
+    // The API only adds to a line, so lowering a quantity removes the line and re-adds it
+    return run(async () => {
+      await api.removeFromCart(productId);
+      return api.addToCart(productId, quantity);
+    });
+  }
+
+  function removeItem(productId: string) {
+    return run(() => api.removeFromCart(productId));
   }
 
   const itemCount = cart?.items.reduce((sum, i) => sum + i.quantity, 0) ?? 0;
 
   return (
-    <CartContext.Provider value={{ cart, itemCount, refresh, addItem, updateItem, removeItem }}>
+    <CartContext.Provider
+      value={{ cart, itemCount, error, refresh, addItem, updateItem, removeItem }}
+    >
       {children}
     </CartContext.Provider>
   );

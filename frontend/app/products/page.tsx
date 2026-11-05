@@ -1,4 +1,4 @@
-import { getAllProducts } from "@/lib/products";
+import { listProducts } from "@/lib/api";
 import ProductCard from "@/components/ProductCard";
 
 const CATEGORIES = [
@@ -11,7 +11,8 @@ export default async function ProductsPage(props: PageProps<"/products">) {
   const searchParams = await props.searchParams;
   const category = typeof searchParams.category === "string" ? searchParams.category : "";
 
-  const products = getAllProducts().filter((p) => !category || p.category === category);
+  // Fetched on the server for every request, so stock levels are current
+  const products = (await listProducts()).filter((p) => !category || p.category === category);
 
   return (
     <div>
@@ -38,6 +39,10 @@ export default async function ProductsPage(props: PageProps<"/products">) {
           ))}
         </div>
       </div>
+
+      {products.length === 0 && (
+        <p className="text-foreground/60">No products in this category yet.</p>
+      )}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {products.map((product) => (
