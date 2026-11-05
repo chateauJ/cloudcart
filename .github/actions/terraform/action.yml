@@ -1,0 +1,89 @@
+name: Terraform plan/apply
+description: Build the Lambda bundles, assume the deploy role through OIDC, then plan (and optionally apply) one environment root.
+
+inputs:
+  environment:
+    description: Root module under infrastructure/environments, e.g. dev or prod
+    required: true
+  apply:
+    description: "true applies the saved plan; false stops after planning"
+    required: true
+  role-to-assume:
+    description: Deploy role ARN
+    required: true
+
+outputs:
+  api_url:
+    description: API endpoint - only set when apply is true
+    value: ${{ steps.outputs.outputs.api_url }}
+  cognito_client_id:
+    description: App client ID - only set when apply is true
+    value: ${{ steps.outputs.outputs.cognito_client_id }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check required secrets
+      shell: bash
+      run: |
+        if [ -z "${TF_VAR_alarm_email:-}" ]; then
+          echo "::error::ALARM_EMAIL is not set - without it this run would plan to delete the alarm email subscription"
+          exit 1
+        fi
+
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: "24"
+        cache: npm
+        cache-dependency-path: backend/package-lock.json
+
+    - name: Build Lambda bundles
+      shell: bash
+      working-directory: backend
+      run: |
+        npm ci
+        npm run build
+
+    - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+      with:
+        role-to-assume: ${{ inputs.role-to-assume }}
+        role-session-name: ${{ inputs.apply == 'true' && 'apply' || 'plan' }}-${{ inputs.environment }}-${{ github.run_id }}
+        aws-region: us-east-1
+
+    - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+      with:
+        terraform_version: "1.14.8"
+        terraform_wrapper: false
+
+    - name: terraform init
+      shell: bash
+      working-directory: infrastructure/environments/${{ inputs.environment }}
+      run: terraform init
+
+    - name: terraform plan
+      shell: bash
+      working-directory: infrastructure/environments/${{ inputs.environment }}
+      run: |
+        terraform plan -out=tfplan
+        {
+          echo "### ${{ inputs.environment }} plan"
+          echo '```'
+          terraform show -no-color tfplan | grep -E '^  # |^Plan:|No changes' || true
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    # Applies exactly the saved plan above - nothing that changed between plan and apply can sneak in
+    - name: terraform apply
+      if: inputs.apply == 'true'
+      shell: bash
+      working-directory: infrastructure/environments/${{ inputs.environment }}
+      run: terraform apply tfplan
+
+    - name: Read outputs
+      id: outputs
+      if: inputs.apply == 'true'
+      shell: bash
+      working-directory: infrastructure/environments/${{ inputs.environment }}
+      run: |
+        echo "api_url=$(terraform output -raw api_endpoint)" >> "$GITHUB_OUTPUT"
+        echo "cognito_client_id=$(terraform output -raw cognito_client_id)" >> "$GITHUB_OUTPUT"
