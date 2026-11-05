@@ -93,7 +93,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        root: [bootstrap, environments/dev] # each root module separately, as each has its own providers and state
+        root: [bootstrap, environments/dev, environments/prod] # each root module separately, as each has its own providers and state
     defaults:
       run:
         working-directory: infrastructure/${{ matrix.root }}
