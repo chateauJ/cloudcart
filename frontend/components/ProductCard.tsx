@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Product } from "@/lib/types";
+import ProductImage from "./ProductImage";
 
 const CATEGORY_LABEL: Record<string, string> = {
   cameras: "Camera",
@@ -12,9 +13,11 @@ export default function ProductCard({ product }: { product: Product }) {
       href={`/products/${product.productId}`}
       className="group flex flex-col rounded-lg border border-foreground/10 p-4 transition-colors hover:border-foreground/30"
     >
-      <div className="mb-3 flex h-32 items-center justify-center rounded-md bg-gradient-to-br from-foreground/5 to-foreground/10 text-3xl font-semibold text-foreground/30">
-        {product.name.charAt(0)}
-      </div>
+      <ProductImage
+        productId={product.productId}
+        name={product.name}
+        className="mb-3 aspect-[4/3] w-full rounded-md"
+      />
       <span className="text-xs font-medium uppercase tracking-wide text-foreground/50">
         {CATEGORY_LABEL[product.category] ?? product.category}
       </span>

@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getProduct } from "@/lib/api";
 import AddToCartButton from "@/components/AddToCartButton";
+import ProductImage from "@/components/ProductImage";
 
 export default async function ProductDetailPage(props: PageProps<"/products/[id]">) {
   const { id } = await props.params;
@@ -18,9 +19,12 @@ export default async function ProductDetailPage(props: PageProps<"/products/[id]
       </Link>
 
       <div className="mt-4 grid grid-cols-1 gap-8 sm:grid-cols-2">
-        <div className="flex h-72 items-center justify-center rounded-lg bg-gradient-to-br from-foreground/5 to-foreground/10 text-6xl font-semibold text-foreground/30">
-          {product.name.charAt(0)}
-        </div>
+        <ProductImage
+          productId={product.productId}
+          name={product.name}
+          className="aspect-[4/3] w-full rounded-lg"
+          initialClassName="text-6xl"
+        />
 
         <div>
           <span className="text-xs font-medium uppercase tracking-wide text-foreground/50">
