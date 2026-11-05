@@ -12,6 +12,7 @@ export default function OrdersPage() {
   const { user, isLoading } = useAuth();
   const router = useRouter();
   const [orders, setOrders] = useState<Order[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isLoading && !user) {
@@ -19,10 +20,15 @@ export default function OrdersPage() {
       return;
     }
     if (user) {
-      api.listOrders(user.userId).then(setOrders);
+      // The API returns the newest 50, newest first
+      api
+        .listOrders()
+        .then(setOrders)
+        .catch((err) => setError(api.errorMessage(err, "Could not load your orders")));
     }
   }, [isLoading, user, router]);
 
+  if (error) return <p className="text-sm text-red-600">{error}</p>;
   if (isLoading || !user || orders === null) return null;
 
   if (orders.length === 0) {

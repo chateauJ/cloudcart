@@ -11,8 +11,8 @@ export default function Navbar() {
   const pathname = usePathname();
   const router = useRouter();
 
-  function handleLogout() {
-    logout();
+  async function handleLogout() {
+    await logout(); // clears Amplify's stored tokens, so a reload stays logged out
     router.push("/login");
   }
 

@@ -13,17 +13,21 @@ export default function AddToCartButton({
   inventory: number;
 }) {
   const { user } = useAuth();
-  const { addItem } = useCart();
+  const { addItem, error } = useCart();
   const router = useRouter();
   const [quantity, setQuantity] = useState(1);
   const [justAdded, setJustAdded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const maxQuantity = Math.min(inventory, 99); // the Cart API accepts at most 99 per add
 
   async function handleAdd() {
     if (!user) {
       router.push("/login");
       return;
     }
-    await addItem(productId, quantity);
+    const added = await addItem(productId, quantity);
+    setFailed(!added);
+    if (!added) return;
     setJustAdded(true);
     setTimeout(() => setJustAdded(false), 1500);
   }
@@ -40,13 +44,13 @@ export default function AddToCartButton({
   }
 
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex flex-wrap items-center gap-3">
       <input
         type="number"
         min={1}
-        max={inventory}
+        max={maxQuantity}
         value={quantity}
-        onChange={(e) => setQuantity(Math.max(1, Math.min(inventory, Number(e.target.value))))}
+        onChange={(e) => setQuantity(Math.max(1, Math.min(maxQuantity, Number(e.target.value))))}
         className="w-16 rounded-md border border-foreground/15 px-2 py-2 text-sm"
       />
       <button
@@ -55,6 +59,7 @@ export default function AddToCartButton({
       >
         {justAdded ? "Added ✓" : user ? "Add to cart" : "Log in to buy"}
       </button>
+      {failed && error && <p className="w-full text-sm text-red-600">{error}</p>}
     </div>
   );
 }

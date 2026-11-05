@@ -4,12 +4,13 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { useCart } from "@/lib/CartContext";
-import { getProductById } from "@/lib/products";
+import { useCatalog } from "@/lib/CatalogContext";
 import * as api from "@/lib/api";
 
 export default function CheckoutPage() {
   const { user, isLoading } = useAuth();
   const { cart, refresh } = useCart();
+  const { productById, isLoading: catalogLoading } = useCatalog();
   const router = useRouter();
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -18,28 +19,28 @@ export default function CheckoutPage() {
     if (!isLoading && !user) router.push("/login");
   }, [isLoading, user, router]);
 
-  if (isLoading || !user) return null;
+  if (isLoading || !user || !cart || catalogLoading) return null;
 
-  const lines = (cart?.items ?? [])
-    .map((item) => ({ item, product: getProductById(item.productId) }))
-    .filter((l) => l.product);
-  const total = lines.reduce((sum, l) => sum + l.product!.price * l.item.quantity, 0);
+  const lines = cart.items.map((item) => ({ item, product: productById(item.productId) }));
+  // An estimate for display only - the Orders API prices the order itself from the catalog
+  const total = lines.reduce((sum, l) => sum + (l.product?.price ?? 0) * l.item.quantity, 0);
 
   async function handlePlaceOrder() {
     setError(null);
     setIsPlacingOrder(true);
     try {
-      const order = await api.createOrder(user!.userId);
-      await refresh();
+      const order = await api.createOrder();
+      await refresh(); // the API cleared the cart in the same transaction that created the order
       router.push(`/orders/${order.orderId}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not place order");
+      setError(api.errorMessage(err, "Could not place order"));
       setIsPlacingOrder(false);
+      await refresh();
     }
   }
 
   if (lines.length === 0) {
-    return <p className="text-foreground/60">Your cart is empty — nothing to check out.</p>;
+    return <p className="text-foreground/60">Your cart is empty - nothing to check out.</p>;
   }
 
   return (
@@ -50,9 +51,9 @@ export default function CheckoutPage() {
         {lines.map(({ item, product }) => (
           <div key={item.productId} className="flex justify-between px-4 py-3 text-sm">
             <span>
-              {product!.name} × {item.quantity}
+              {product?.name ?? item.productId} × {item.quantity}
             </span>
-            <span className="font-medium">${(product!.price * item.quantity).toFixed(2)}</span>
+            <span className="font-medium">${((product?.price ?? 0) * item.quantity).toFixed(2)}</span>
           </div>
         ))}
         <div className="flex justify-between px-4 py-3 text-base font-semibold">
@@ -71,8 +72,8 @@ export default function CheckoutPage() {
         {isPlacingOrder ? "Placing order..." : "Place order"}
       </button>
       <p className="mt-3 text-center text-xs text-foreground/50">
-        Order processing is asynchronous — status starts as PENDING and updates
-        automatically once inventory is reserved.
+        Order processing is asynchronous - status starts as PENDING and updates once inventory is
+        reserved by the Inventory Lambda.
       </p>
     </div>
   );

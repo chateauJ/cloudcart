@@ -17,7 +17,7 @@ export interface CartItem {
 export interface Cart {
   userId: string;
   items: CartItem[];
-  updatedAt: string;
+  updatedAt?: string; // absent until the cart is first saved
 }
 
 export type OrderStatus = "PENDING" | "PROCESSING" | "COMPLETE" | "FAILED";
@@ -36,4 +36,5 @@ export interface Order {
   items: OrderLineItem[];
   createdAt: string;
   updatedAt: string;
+  failureReason?: string; // set only when status is FAILED
 }

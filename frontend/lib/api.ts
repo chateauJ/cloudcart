@@ -1,136 +1,107 @@
-// Mock data layer. Every function here has the same signature it will have once
-// it calls the real API Gateway endpoints from spec.md §12 - swapping the body
-// of each function for a `fetch(...)` call is the only change needed later.
-// Cart/order state is kept in localStorage, scoped by userId, to stand in for
-// DynamoDB until the backend exists.
+// Client for the CloudCart HTTP API (spec.md §12). Products are public; cart and order calls
+// attach the signed-in user's Cognito access token, and the API derives the user from it -
+// nothing here ever sends a user ID.
 
-import { getAllProducts, getProductById } from "./products";
-import { readJSON, writeJSON } from "./storage";
+import { fetchAuthSession } from "aws-amplify/auth";
+import { config } from "./config";
 import { Cart, Order, Product } from "./types";
 
-function cartKey(userId: string) {
-  return `cloudcart:cart:${userId}`;
+// Every handler returns errors as { error: { code, message } } (backend/shared/responses.ts)
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
 }
 
-function ordersKey(userId: string) {
-  return `cloudcart:orders:${userId}`;
+async function accessToken(): Promise<string> {
+  // Amplify refreshes an expired access token with the refresh token before returning it
+  const session = await fetchAuthSession();
+  const token = session.tokens?.accessToken?.toString();
+  if (!token) throw new ApiError(401, "UNAUTHORIZED", "You need to log in again");
+  return token;
 }
 
-function emptyCart(userId: string): Cart {
-  return { userId, items: [], updatedAt: new Date().toISOString() };
+async function request<T>(
+  method: string,
+  path: string,
+  options: { auth?: boolean; body?: unknown } = {},
+): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (options.auth) headers.Authorization = `Bearer ${await accessToken()}`;
+  if (options.body !== undefined) headers["Content-Type"] = "application/json";
+
+  const res = await fetch(`${config.apiUrl}${path}`, {
+    method,
+    headers,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    cache: "no-store", // stock levels and order status change constantly
+  });
+
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : undefined;
+
+  if (!res.ok) {
+    // API Gateway's own 401 (authorizer rejected the token) has { message } instead of { error }
+    const code = data?.error?.code ?? (res.status === 401 ? "UNAUTHORIZED" : "HTTP_ERROR");
+    const message = data?.error?.message ?? data?.message ?? `Request failed (${res.status})`;
+    throw new ApiError(res.status, code, message);
+  }
+  return data as T;
 }
 
-export async function listProducts(): Promise<Product[]> {
-  return getAllProducts();
+export function listProducts(): Promise<Product[]> {
+  return request<Product[]>("GET", "/products");
 }
 
 export async function getProduct(productId: string): Promise<Product | null> {
-  return getProductById(productId) ?? null;
-}
-
-export async function getCart(userId: string): Promise<Cart> {
-  return readJSON<Cart>(cartKey(userId), emptyCart(userId));
-}
-
-export async function addToCart(
-  userId: string,
-  productId: string,
-  quantity: number,
-): Promise<Cart> {
-  const cart = await getCart(userId);
-  const existing = cart.items.find((i) => i.productId === productId);
-  if (existing) {
-    existing.quantity += quantity;
-  } else {
-    cart.items.push({ productId, quantity });
+  try {
+    return await request<Product>("GET", `/products/${encodeURIComponent(productId)}`);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
   }
-  cart.updatedAt = new Date().toISOString();
-  writeJSON(cartKey(userId), cart);
-  return cart;
 }
 
-export async function updateCartItemQuantity(
-  userId: string,
-  productId: string,
-  quantity: number,
-): Promise<Cart> {
-  const cart = await getCart(userId);
-  if (quantity <= 0) {
-    cart.items = cart.items.filter((i) => i.productId !== productId);
-  } else {
-    const existing = cart.items.find((i) => i.productId === productId);
-    if (existing) existing.quantity = quantity;
+export function getCart(): Promise<Cart> {
+  return request<Cart>("GET", "/cart", { auth: true });
+}
+
+// Adds to the line's existing quantity - the API has no "set quantity" route
+export function addToCart(productId: string, quantity: number): Promise<Cart> {
+  return request<Cart>("POST", "/cart/items", { auth: true, body: { productId, quantity } });
+}
+
+export function removeFromCart(productId: string): Promise<Cart> {
+  return request<Cart>("DELETE", `/cart/items/${encodeURIComponent(productId)}`, { auth: true });
+}
+
+export function createOrder(): Promise<Order> {
+  return request<Order>("POST", "/orders", { auth: true });
+}
+
+export function listOrders(): Promise<Order[]> {
+  return request<Order[]>("GET", "/orders", { auth: true });
+}
+
+export async function getOrder(orderId: string): Promise<Order | null> {
+  try {
+    return await request<Order>("GET", `/orders/${encodeURIComponent(orderId)}`, { auth: true });
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
   }
-  cart.updatedAt = new Date().toISOString();
-  writeJSON(cartKey(userId), cart);
-  return cart;
 }
 
-export async function removeFromCart(userId: string, productId: string): Promise<Cart> {
-  const cart = await getCart(userId);
-  cart.items = cart.items.filter((i) => i.productId !== productId);
-  cart.updatedAt = new Date().toISOString();
-  writeJSON(cartKey(userId), cart);
-  return cart;
-}
-
-export async function listOrders(userId: string): Promise<Order[]> {
-  const orders = readJSON<Order[]>(ordersKey(userId), []);
-  return [...orders].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-}
-
-export async function getOrder(userId: string, orderId: string): Promise<Order | null> {
-  const orders = await listOrders(userId);
-  return orders.find((o) => o.orderId === orderId) ?? null;
-}
-
-// Simulates the real flow: order is created PENDING, then the (mock) async
-// inventory processing completes it a couple seconds later - stands in for
-// the DynamoDB Streams -> EventBridge Pipe -> SQS -> Inventory Lambda path
-// in spec.md §4 until that backend exists.
-export async function createOrder(userId: string): Promise<Order> {
-  const cart = await getCart(userId);
-  if (cart.items.length === 0) {
-    throw new Error("Cannot create an order from an empty cart");
+// Turns an unknown thrown value into something a page can show
+export function errorMessage(err: unknown, fallback = "Something went wrong"): string {
+  if (err instanceof ApiError) {
+    if (err.code === "CART_CONFLICT") return "Your cart changed in another tab - review it and try again.";
+    return err.message;
   }
-
-  const items = cart.items.map((item) => {
-    const product = getProductById(item.productId);
-    return {
-      productId: item.productId,
-      quantity: item.quantity,
-      unitPrice: product?.price ?? 0,
-    };
-  });
-  const total = items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0);
-
-  const now = new Date().toISOString();
-  const order: Order = {
-    orderId: `order_${crypto.randomUUID().split("-")[0]}`,
-    userId,
-    status: "PENDING",
-    total: Math.round(total * 100) / 100,
-    items,
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  const orders = readJSON<Order[]>(ordersKey(userId), []);
-  orders.push(order);
-  writeJSON(ordersKey(userId), orders);
-  writeJSON(cartKey(userId), emptyCart(userId));
-
-  if (typeof window !== "undefined") {
-    window.setTimeout(() => {
-      const current = readJSON<Order[]>(ordersKey(userId), []);
-      const updated = current.map((o) =>
-        o.orderId === order.orderId
-          ? { ...o, status: "COMPLETE" as const, updatedAt: new Date().toISOString() }
-          : o,
-      );
-      writeJSON(ordersKey(userId), updated);
-    }, 2500);
-  }
-
-  return order;
+  return err instanceof Error ? err.message : fallback;
 }

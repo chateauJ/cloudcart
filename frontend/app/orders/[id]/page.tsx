@@ -4,48 +4,56 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
+import { useCatalog } from "@/lib/CatalogContext";
 import * as api from "@/lib/api";
-import { getProductById } from "@/lib/products";
 import { Order } from "@/lib/types";
 import OrderStatusBadge from "@/components/OrderStatusBadge";
+
+const POLL_INTERVAL_MS = 1500;
+const POLL_TIMEOUT_MS = 60_000; // stop polling a stuck order rather than hitting the API forever
 
 export default function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { user, isLoading } = useAuth();
+  const { productById } = useCatalog();
   const router = useRouter();
   const [order, setOrder] = useState<Order | null | undefined>(undefined);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isLoading && !user) {
-      router.push("/login");
-    }
+    if (!isLoading && !user) router.push("/login");
   }, [isLoading, user, router]);
 
-  // Poll while the order is still processing so the status transition
-  // (PENDING -> COMPLETE) driven by the mock async flow in lib/api.ts is visible.
+  // The order is created PENDING; the Streams -> Pipe -> SQS -> Inventory Lambda path moves it to
+  // COMPLETE or FAILED a few seconds later, so poll until it settles
   useEffect(() => {
     if (!user) return;
 
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const startedAt = Date.now();
 
     async function load() {
-      const found = await api.getOrder(user!.userId, id);
-      if (cancelled) return;
-      setOrder(found);
-      if (!found || found.status !== "PENDING") {
-        clearInterval(intervalId);
+      try {
+        const found = await api.getOrder(id);
+        if (cancelled) return;
+        setOrder(found);
+        if (found?.status === "PENDING" && Date.now() - startedAt < POLL_TIMEOUT_MS) {
+          timer = setTimeout(load, POLL_INTERVAL_MS);
+        }
+      } catch (err) {
+        if (!cancelled) setError(api.errorMessage(err, "Could not load this order"));
       }
     }
 
     load();
-    const intervalId = setInterval(load, 1000);
-
     return () => {
       cancelled = true;
-      if (intervalId) clearInterval(intervalId);
+      clearTimeout(timer);
     };
   }, [user, id]);
 
+  if (error) return <p className="text-sm text-red-600">{error}</p>;
   if (isLoading || !user || order === undefined) return null;
 
   if (order === null) {
@@ -75,22 +83,25 @@ export default function OrderDetailPage() {
 
       {order.status === "PENDING" && (
         <p className="mt-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          Processing your order — inventory is being reserved asynchronously.
+          Processing your order - inventory is being reserved asynchronously.
+        </p>
+      )}
+      {order.status === "FAILED" && (
+        <p className="mt-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-800">
+          {order.failureReason ?? "This order could not be completed."}
         </p>
       )}
 
       <div className="mt-6 divide-y divide-foreground/10 rounded-lg border border-foreground/10">
-        {order.items.map((line) => {
-          const product = getProductById(line.productId);
-          return (
-            <div key={line.productId} className="flex justify-between px-4 py-3 text-sm">
-              <span>
-                {product?.name ?? line.productId} × {line.quantity}
-              </span>
-              <span className="font-medium">${(line.unitPrice * line.quantity).toFixed(2)}</span>
-            </div>
-          );
-        })}
+        {order.items.map((line) => (
+          <div key={line.productId} className="flex justify-between px-4 py-3 text-sm">
+            <span>
+              {productById(line.productId)?.name ?? line.productId} × {line.quantity}
+            </span>
+            {/* unitPrice is the price snapshotted when the order was placed */}
+            <span className="font-medium">${(line.unitPrice * line.quantity).toFixed(2)}</span>
+          </div>
+        ))}
         <div className="flex justify-between px-4 py-3 text-base font-semibold">
           <span>Total</span>
           <span>${order.total.toFixed(2)}</span>
