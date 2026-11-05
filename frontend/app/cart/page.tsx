@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { useCart } from "@/lib/CartContext";
 import { useCatalog } from "@/lib/CatalogContext";
+import ProductImage from "@/components/ProductImage";
 
 // Commits on blur or Enter rather than every keystroke - typing "12" would otherwise send
 // one request for 1 and another for 12
@@ -85,9 +86,12 @@ export default function CartPage() {
       <div className="mt-6 divide-y divide-foreground/10">
         {lines.map(({ item, product }) => (
           <div key={item.productId} className="flex items-center gap-4 py-4">
-            <div className="flex h-16 w-16 flex-shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-foreground/5 to-foreground/10 text-xl font-semibold text-foreground/30">
-              {(product?.name ?? "?").charAt(0)}
-            </div>
+            <ProductImage
+              productId={item.productId}
+              name={product?.name ?? item.productId}
+              className="h-16 w-20 flex-shrink-0 rounded-md"
+              initialClassName="text-xl"
+            />
             <div className="flex-1">
               <Link href={`/products/${item.productId}`} className="font-medium hover:underline">
                 {product?.name ?? item.productId}

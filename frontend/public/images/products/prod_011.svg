@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-label="Drop-proof phone case">
+  <title>Drop-proof phone case</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#faf3ea"/><stop offset="1" stop-color="#ead6bf"/></linearGradient>
+    <linearGradient id="metal" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4a515c"/><stop offset="1" stop-color="#22262d"/></linearGradient>
+    <linearGradient id="metalSide" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#23272e"/><stop offset=".5" stop-color="#4b525d"/><stop offset="1" stop-color="#23272e"/></linearGradient>
+    <radialGradient id="glass" cx=".38" cy=".35" r=".75"><stop offset="0" stop-color="#7fb1ff"/><stop offset=".45" stop-color="#2f5da8"/><stop offset="1" stop-color="#0d1a33"/></radialGradient>
+    <radialGradient id="shadow" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#000" stop-opacity=".22"/><stop offset="1" stop-color="#000" stop-opacity="0"/></radialGradient>
+  </defs>
+  <rect width="400" height="300" fill="url(#bg)"/>
+  <ellipse cx="200" cy="264" rx="95" ry="14" fill="url(#shadow)"/>
+  <rect x="132" y="34" width="136" height="226" rx="30" fill="#2f6f6a"/>
+  <rect x="146" y="48" width="108" height="198" rx="20" fill="#3f8b85"/>
+  <path d="M132 64 a30 30 0 0 1 30 -30 h10 v18 h-22 v22 h-18 z M268 64 a30 30 0 0 0 -30 -30 h-10 v18 h22 v22 h18 z M132 230 a30 30 0 0 0 30 30 h10 v-18 h-22 v-22 h-18 z M268 230 a30 30 0 0 1 -30 30 h-10 v-18 h22 v-22 h18 z" fill="#1f4f4b"/>
+  <rect x="158" y="60" width="50" height="50" rx="12" fill="#1a1d22"/>
+  <circle cx="171" cy="73" r="7" fill="url(#glass)"/>
+  <circle cx="195" cy="97" r="7" fill="url(#glass)"/>
+  <path d="M200 160 l14 8 v16 c0 10 -7 17 -14 20 c-7 -3 -14 -10 -14 -20 v-16 z" fill="#fff" opacity=".85"/>
+</svg>

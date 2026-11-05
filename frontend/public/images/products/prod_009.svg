@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-label="Magnetic car vent mount">
+  <title>Magnetic car vent mount</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#faf3ea"/><stop offset="1" stop-color="#ead6bf"/></linearGradient>
+    <linearGradient id="metal" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4a515c"/><stop offset="1" stop-color="#22262d"/></linearGradient>
+    <linearGradient id="metalSide" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#23272e"/><stop offset=".5" stop-color="#4b525d"/><stop offset="1" stop-color="#23272e"/></linearGradient>
+    <radialGradient id="glass" cx=".38" cy=".35" r=".75"><stop offset="0" stop-color="#7fb1ff"/><stop offset=".45" stop-color="#2f5da8"/><stop offset="1" stop-color="#0d1a33"/></radialGradient>
+    <radialGradient id="shadow" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#000" stop-opacity=".22"/><stop offset="1" stop-color="#000" stop-opacity="0"/></radialGradient>
+  </defs>
+  <rect width="400" height="300" fill="url(#bg)"/>
+  <ellipse cx="200" cy="266" rx="120" ry="14" fill="url(#shadow)"/>
+  <rect x="70" y="150" width="260" height="96" rx="14" fill="#3d434d"/>
+  <rect x="82" y="162" width="236" height="10" rx="5" fill="#22262d"/>
+  <rect x="82" y="182" width="236" height="10" rx="5" fill="#22262d"/>
+  <rect x="82" y="202" width="236" height="10" rx="5" fill="#22262d"/>
+  <rect x="82" y="222" width="236" height="10" rx="5" fill="#22262d"/>
+  <path d="M200 166 v-30" stroke="#2b2f36" stroke-width="16" stroke-linecap="round"/>
+  <circle cx="200" cy="96" r="54" fill="url(#metal)"/>
+  <circle cx="200" cy="96" r="40" fill="#d9822b"/>
+  <circle cx="200" cy="96" r="30" fill="none" stroke="#fff" stroke-opacity=".8" stroke-width="5"/>
+  <circle cx="200" cy="96" r="6" fill="#fff" opacity=".8"/>
+</svg>
