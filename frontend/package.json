@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "env:dev": "sh scripts/write-env.sh dev",
-    "env:prod": "sh scripts/write-env.sh prod"
+    "env:prod": "sh scripts/write-env.sh prod",
+    "demo:record": "node scripts/record-demo.mjs"
   },
   "dependencies": {
     "aws-amplify": "^6.22.2",

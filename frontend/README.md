@@ -22,6 +22,25 @@ npm run dev       # http://localhost:3000
 The API only accepts browser requests from `http://localhost:3000` (its CORS setting), so keep the
 default port.
 
+## Recording the demo
+
+`npm run demo:record` re-records the demo at the top of the root README. It drives headless Chrome
+through the whole shopping flow against the running storefront, then uses ffmpeg to write
+`docs/demo/cloudcart-demo.mp4` and `cloudcart-demo.gif`. It needs Google Chrome, ffmpeg, and a
+confirmed user in the target Cognito pool whose credentials are in `.env.demo` (gitignored):
+
+```bash
+CLOUDCART_DEMO_EMAIL=demo@example.com
+CLOUDCART_DEMO_PASSWORD=...
+```
+
+```bash
+npm run build && npm start   # production build, so no Next.js dev overlay is recorded
+npm run demo:record          # in a second terminal
+```
+
+Before recording, it empties that user's cart off camera, so every take starts the same way.
+
 ## How it maps to the backend
 
 | File | Purpose |
