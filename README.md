@@ -2,6 +2,10 @@
 
 A serverless, event-driven e-commerce backend on AWS. Every resource is defined in Terraform and shipped through GitHub Actions. The backend and infrastructure are the core of the project; the Next.js storefront is a thin demo client.
 
+![CloudCart demo: browse the catalog, sign in, add to cart, check out, and watch the order go from PENDING to COMPLETE](docs/demo/cloudcart-demo.gif)
+
+*A real session against the dev environment, recorded by [`frontend/scripts/record-demo.mjs`](frontend/scripts/record-demo.mjs). The order shows `PENDING` and turns `COMPLETE` a few seconds later, once the inventory Lambda has reserved stock through the async [order path](#architecture). [Full-resolution MP4](docs/demo/cloudcart-demo.mp4).*
+
 ## Status
 
 | Area | State |
@@ -71,6 +75,20 @@ The API answers checkout before inventory is reserved, so a slow or failing inve
 | --- | --- |
 | ![Product grid](docs/screenshots/products.png) | ![Product page](docs/screenshots/product-detail.png) |
 
+### Behind the scenes
+
+**Deploy pipeline.** A merge to `main` reruns the tests, deploys and smoke-tests dev, plans prod, waits for a reviewer, then deploys and smoke-tests prod (see [CI/CD](#cicd)).
+
+![GitHub Actions deploy run: tests, deploy dev, smoke test dev, plan prod, deploy prod, smoke test prod](docs/screenshots/pipeline.png)
+
+**CloudCart dashboard in CloudWatch (dev), after the demo run.** Every alarm is OK, and the spike on the right is the recorded session (see [Monitoring](#monitoring)).
+
+![CloudWatch dashboard with alarm status, API, Lambda, pipe, queue and DynamoDB widgets](docs/screenshots/dashboard.png)
+
+**X-Ray trace map.** Each Lambda and the DynamoDB tables it calls, drawn from the traces of the same session.
+
+<img src="docs/screenshots/xray-trace-map.png" alt="X-Ray trace map: the cart, orders, products, inventory and notifications Lambdas and the DynamoDB tables they call" width="560">
+
 ### Key design decisions
 
 - **No dual write.** If the orders Lambda wrote to DynamoDB and then called `PutEvents`, a crash between the two calls would leave an order with no event. Emitting events from the table's stream ties the event to the committed write, and the orders Lambda has no EventBridge permission at all.
@@ -131,6 +149,7 @@ infrastructure/
     dev/                        # root module + state for dev
     prod/                       # root module + state for prod
 frontend/                       # Next.js demo storefront: real API + Cognito (SRP) sign-in
+docs/demo/                      # demo MP4 and GIF, recorded by frontend/scripts/record-demo.mjs
 docs/screenshots/               # images used in this README
 .github/
   workflows/test.yml            # PR checks, also reused by deploy.yml
@@ -201,7 +220,7 @@ npm run env:dev   # writes .env.local from the dev Terraform outputs
 npm run dev
 ```
 
-Open http://localhost:3000 (the API's CORS setting only allows this origin). Sign up with a real email address: Cognito emails a confirmation code, and sign-in then uses SRP, so the password never leaves the browser. See [`frontend/README.md`](frontend/README.md) for how the client maps to the API.
+Open http://localhost:3000 (the API's CORS setting only allows this origin). Sign up with a real email address: Cognito emails a confirmation code, and sign-in then uses SRP, so the password never leaves the browser. See [`frontend/README.md`](frontend/README.md) for how the client maps to the API and how to re-record the demo.
 
 ## CI/CD
 
