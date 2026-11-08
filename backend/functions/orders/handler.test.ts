@@ -7,13 +7,25 @@ import {
   TransactWriteCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { mockClient } from "aws-sdk-client-mock";
-import { apiEvent, context, logLines, parseResponse, USER_ID } from "../../test/helpers";
+import {
+  apiEvent,
+  context,
+  dataCalls,
+  logLines,
+  parseResponse,
+  TENANT,
+  TENANT_ID,
+  TENANTS_TABLE,
+  USER_ID,
+} from "../../test/helpers";
 import { handler } from "./handler";
 
 const ddb = mockClient(DynamoDBDocumentClient);
 
 const CART_UPDATED_AT = "2026-11-01T00:00:00.000Z";
+const TENANT_USER = `${TENANT_ID}#${USER_ID}`;
 const cart = {
+  tenantId: TENANT_ID,
   userId: USER_ID,
   items: [
     { productId: "prod_001", quantity: 1 },
@@ -25,15 +37,19 @@ const cart = {
 const sticker = { productId: "prod_001", name: "Sticker", price: 0.1, inventory: 50 };
 const pin = { productId: "prod_002", name: "Pin", price: 0.2, inventory: 50 };
 
-const existingOrder = {
+// As stored: tenantUser keys the user index and is stripped from API responses
+const storedOrder = {
+  tenantId: TENANT_ID,
   orderId: "order_1",
   userId: USER_ID,
+  tenantUser: TENANT_USER,
   status: "COMPLETE",
   total: 0.5,
   items: [],
   createdAt: CART_UPDATED_AT,
   updatedAt: CART_UPDATED_AT,
 };
+const { tenantUser: _indexKey, ...returnedOrder } = storedOrder;
 
 function givenCart(value: object | undefined) {
   ddb.on(GetCommand, { TableName: "carts-table" }).resolves({ Item: value });
@@ -51,7 +67,10 @@ function getOrder(orderId: string) {
   return handler(apiEvent({ routeKey: "GET /orders/{id}", userId: USER_ID, pathParameters: { id: orderId } }), context);
 }
 
-beforeEach(() => ddb.reset());
+beforeEach(() => {
+  ddb.reset();
+  ddb.on(GetCommand, { TableName: TENANTS_TABLE }).resolves({ Item: TENANT });
+});
 
 describe("orders handler", () => {
   it("rejects a request without a verified user before touching DynamoDB", async () => {
@@ -59,6 +78,16 @@ describe("orders handler", () => {
 
     expect(res.statusCode).toBe(401);
     expect(ddb.calls()).toHaveLength(0);
+  });
+
+  it("rejects a request for an unknown tenant before reading any order data", async () => {
+    ddb.on(GetCommand, { TableName: TENANTS_TABLE }).resolves({});
+
+    const res = parseResponse(await handler(apiEvent({ routeKey: "GET /orders", userId: USER_ID, tenantId: "nobody" }), context));
+
+    expect(res.statusCode).toBe(404);
+    expect(res.body.error.code).toBe("TENANT_NOT_FOUND");
+    expect(dataCalls(ddb.calls())).toHaveLength(0);
   });
 
   describe("POST /orders", () => {
@@ -70,6 +99,7 @@ describe("orders handler", () => {
 
       expect(res.statusCode).toBe(201);
       expect(res.body).toMatchObject({
+        tenantId: TENANT_ID,
         orderId: expect.stringMatching(/^order_[0-9a-f-]{36}$/),
         userId: USER_ID,
         status: "PENDING",
@@ -80,12 +110,24 @@ describe("orders handler", () => {
         ],
       });
 
+      expect(res.body).not.toHaveProperty("tenantUser");
+
+      // Prices come from this store's catalog
+      expect(ddb.commandCalls(BatchGetCommand)[0].args[0].input.RequestItems).toEqual({
+        "products-table": {
+          Keys: [
+            { tenantId: TENANT_ID, productId: "prod_001" },
+            { tenantId: TENANT_ID, productId: "prod_002" },
+          ],
+        },
+      });
+
       const transaction = ddb.commandCalls(TransactWriteCommand)[0].args[0].input;
       expect(transaction.TransactItems).toMatchObject([
         {
           Put: {
             TableName: "orders-table",
-            Item: { orderId: res.body.orderId },
+            Item: { tenantId: TENANT_ID, orderId: res.body.orderId, tenantUser: TENANT_USER },
             ConditionExpression: "attribute_not_exists(orderId)",
           },
         },
@@ -93,7 +135,7 @@ describe("orders handler", () => {
           // The cart is deleted only if it's still the version that was priced
           Delete: {
             TableName: "carts-table",
-            Key: { userId: USER_ID },
+            Key: { tenantId: TENANT_ID, userId: USER_ID },
             ExpressionAttributeValues: { ":cartUpdatedAt": CART_UPDATED_AT },
           },
         },
@@ -182,16 +224,17 @@ describe("orders handler", () => {
   });
 
   describe("GET /orders", () => {
-    it("lists the user's orders newest first from the user index", async () => {
-      ddb.on(QueryCommand).resolves({ Items: [existingOrder] });
+    it("lists the user's orders at this store, newest first, from the user index", async () => {
+      ddb.on(QueryCommand).resolves({ Items: [storedOrder] });
 
       const res = parseResponse(await handler(apiEvent({ routeKey: "GET /orders", userId: USER_ID }), context));
 
       expect(res.statusCode).toBe(200);
-      expect(res.body).toEqual([existingOrder]);
+      expect(res.body).toEqual([returnedOrder]);
       expect(ddb).toHaveReceivedCommandWith(QueryCommand, {
-        IndexName: "userId-createdAt-index",
-        ExpressionAttributeValues: { ":userId": USER_ID },
+        IndexName: "tenantUser-createdAt-index",
+        KeyConditionExpression: "tenantUser = :tenantUser",
+        ExpressionAttributeValues: { ":tenantUser": TENANT_USER },
         ScanIndexForward: false,
         Limit: 50,
       });
@@ -199,13 +242,15 @@ describe("orders handler", () => {
   });
 
   describe("GET /orders/{id}", () => {
-    it("returns the user's own order", async () => {
-      ddb.on(GetCommand, { TableName: "orders-table" }).resolves({ Item: existingOrder });
+    it("returns the user's own order, read by its tenant-scoped key", async () => {
+      ddb.on(GetCommand, { TableName: "orders-table", Key: { tenantId: TENANT_ID, orderId: "order_1" } }).resolves({
+        Item: storedOrder,
+      });
 
       const res = parseResponse(await getOrder("order_1"));
 
       expect(res.statusCode).toBe(200);
-      expect(res.body).toEqual(existingOrder);
+      expect(res.body).toEqual(returnedOrder);
     });
 
     it("returns 404 for an order that doesn't exist", async () => {
@@ -218,7 +263,7 @@ describe("orders handler", () => {
     });
 
     it("returns the same 404 for another user's order, so order IDs can't be probed", async () => {
-      ddb.on(GetCommand, { TableName: "orders-table" }).resolves({ Item: { ...existingOrder, userId: "user-2" } });
+      ddb.on(GetCommand, { TableName: "orders-table" }).resolves({ Item: { ...storedOrder, userId: "user-2" } });
 
       const res = parseResponse(await getOrder("order_1"));
 

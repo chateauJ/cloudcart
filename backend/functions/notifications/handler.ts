@@ -32,7 +32,8 @@ function parseDetail(record: SNSEventRecord): OrderCreatedDetail | null {
     const detail = event.detail;
 
     if (
-      typeof detail?.orderId !== "string" ||
+      typeof detail?.tenantId !== "string" ||
+      typeof detail.orderId !== "string" ||
       typeof detail.userId !== "string" ||
       typeof detail.total !== "string" ||
       !Number.isFinite(Number(detail.total)) ||
@@ -41,7 +42,13 @@ function parseDetail(record: SNSEventRecord): OrderCreatedDetail | null {
       return null;
     }
 
-    return { orderId: detail.orderId, userId: detail.userId, total: detail.total, createdAt: detail.createdAt };
+    return {
+      tenantId: detail.tenantId,
+      orderId: detail.orderId,
+      userId: detail.userId,
+      total: detail.total,
+      createdAt: detail.createdAt,
+    };
   } catch {
     return null;
   }

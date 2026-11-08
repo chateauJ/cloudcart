@@ -107,3 +107,18 @@ output "site_distribution_id" {
   description = "CloudFront distribution the deploy job invalidates after an upload"
   value       = module.site.distribution_id
 }
+
+output "tenants_table_name" {
+  description = "Tenants table - one item per business sharing this deployment"
+  value       = module.tenants_table.table_name
+}
+
+output "storefront_tenant_id" {
+  description = "Tenant the hosted storefront is built for - sent as X-Tenant-Id on every API call"
+  value       = var.storefront_tenant_id
+
+  precondition {
+    condition     = contains(keys(local.tenants), var.storefront_tenant_id)
+    error_message = "storefront_tenant_id must be a tenant in tenants.json."
+  }
+}

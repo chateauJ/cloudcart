@@ -10,6 +10,8 @@ const REQUIRED = [
 
 export interface Config {
   apiUrl: string;
+  tenantId: string; // the store the golden path shops at
+  otherTenantId: string; // a second store, for the isolation checks
   clientId: string;
   username: string;
   password: string;
@@ -23,6 +25,9 @@ export function loadConfig(): Config {
   }
   return {
     apiUrl: process.env.CLOUDCART_API_URL!.replace(/\/+$/, ""),
+    // The seeded tenants (infrastructure/modules/app/tenants.json)
+    tenantId: process.env.CLOUDCART_TENANT_ID ?? "northlight",
+    otherTenantId: process.env.CLOUDCART_OTHER_TENANT_ID ?? "tidewater",
     clientId: process.env.CLOUDCART_COGNITO_CLIENT_ID!,
     username: process.env.CLOUDCART_TEST_USERNAME!,
     password: process.env.CLOUDCART_TEST_PASSWORD!,
@@ -66,9 +71,12 @@ export async function api(
   config: Config,
   method: string,
   path: string,
-  options: { token?: string; body?: unknown } = {},
+  // tenant defaults to config.tenantId; null sends no X-Tenant-Id header
+  options: { token?: string; body?: unknown; tenant?: string | null } = {},
 ): Promise<ApiResponse> {
   const headers: Record<string, string> = {};
+  const tenant = options.tenant === undefined ? config.tenantId : options.tenant;
+  if (tenant !== null) headers["X-Tenant-Id"] = tenant;
   if (options.token) headers.Authorization = `Bearer ${options.token}`;
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
 

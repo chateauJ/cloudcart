@@ -12,4 +12,6 @@ export const config = {
   apiUrl: required("NEXT_PUBLIC_API_URL", process.env.NEXT_PUBLIC_API_URL).replace(/\/+$/, ""),
   userPoolId: required("NEXT_PUBLIC_COGNITO_USER_POOL_ID", process.env.NEXT_PUBLIC_COGNITO_USER_POOL_ID),
   userPoolClientId: required("NEXT_PUBLIC_COGNITO_CLIENT_ID", process.env.NEXT_PUBLIC_COGNITO_CLIENT_ID),
+  // One build per storefront: the business whose catalog, carts and orders this site shows
+  tenantId: required("NEXT_PUBLIC_TENANT_ID", process.env.NEXT_PUBLIC_TENANT_ID),
 };

@@ -85,6 +85,7 @@ resource "aws_pipes_pipe" "orders" { # stream -> bus with no code: OrderCreated 
     # in stream records, and Pipes quotes string values even when the template doesn't.
     input_template = <<-EOT
       {
+        "tenantId": "<$.dynamodb.NewImage.tenantId.S>",
         "orderId": "<$.dynamodb.NewImage.orderId.S>",
         "userId": "<$.dynamodb.NewImage.userId.S>",
         "total": "<$.dynamodb.NewImage.total.N>",

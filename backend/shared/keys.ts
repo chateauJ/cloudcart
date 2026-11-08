@@ -1,0 +1,11 @@
+// Every DynamoDB key is built here, and every builder takes the tenant first. A handler can't
+// read or write an item without naming the tenant it belongs to, so one store's request can
+// never address another store's data by ID alone.
+export const keys = {
+  tenant: (tenantId: string) => ({ tenantId }),
+  product: (tenantId: string, productId: string) => ({ tenantId, productId }),
+  cart: (tenantId: string, userId: string) => ({ tenantId, userId }),
+  order: (tenantId: string, orderId: string) => ({ tenantId, orderId }),
+  // The orders table's user-index partition key: one shopper's history at one store
+  tenantUser: (tenantId: string, userId: string) => `${tenantId}#${userId}`,
+};

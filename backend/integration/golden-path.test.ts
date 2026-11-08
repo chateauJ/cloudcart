@@ -26,6 +26,13 @@ describe("CloudCart dev API", () => {
     expect(res.body.length).toBeGreaterThan(0);
   });
 
+  it("names the store a request is for", async () => {
+    const res = await api(config, "GET", "/tenant");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ tenantId: config.tenantId, name: expect.any(String) });
+  });
+
   it("takes an order from cart to COMPLETE and decrements inventory", async () => {
     // Start from an empty cart so leftovers from earlier manual testing don't end up in the order
     const existing = await api(config, "GET", "/cart", { token });
@@ -50,7 +57,7 @@ describe("CloudCart dev API", () => {
 
     const created = await api(config, "POST", "/orders", { token });
     expect(created.status).toBe(201);
-    expect(created.body).toMatchObject({ status: "PENDING", total: product.price });
+    expect(created.body).toMatchObject({ tenantId: config.tenantId, status: "PENDING", total: product.price });
     const orderId: string = created.body.orderId;
 
     // Checkout clears the cart in the same transaction that writes the order
@@ -69,6 +76,10 @@ describe("CloudCart dev API", () => {
 
     const history = await api(config, "GET", "/orders", { token });
     expect(history.body[0].orderId).toBe(orderId); // newest first
+
+    // The same order doesn't exist from another store's point of view
+    const elsewhere = await api(config, "GET", `/orders/${orderId}`, { token, tenant: config.otherTenantId });
+    expect(elsewhere.status).toBe(404);
   });
 
   it("returns 404 for an order that doesn't exist", async () => {
@@ -76,5 +87,62 @@ describe("CloudCart dev API", () => {
 
     expect(res.status).toBe(404);
     expect(res.body.error.code).toBe("ORDER_NOT_FOUND");
+  });
+});
+
+describe("Tenant isolation", () => {
+  it("requires the X-Tenant-Id header", async () => {
+    const res = await api(config, "GET", "/products", { tenant: null });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("TENANT_REQUIRED");
+  });
+
+  it("rejects a store that doesn't exist", async () => {
+    const res = await api(config, "GET", "/products", { tenant: "no-such-store" });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe("TENANT_NOT_FOUND");
+  });
+
+  it("gives each store its own catalog, even where product IDs overlap", async () => {
+    const mine = await api(config, "GET", "/products");
+    const theirs = await api(config, "GET", "/products", { tenant: config.otherTenantId });
+
+    expect(theirs.status).toBe(200);
+    expect(theirs.body.every((p: { tenantId: string }) => p.tenantId === config.otherTenantId)).toBe(true);
+
+    // A product ID both stores carry resolves to each store's own item, with its own price
+    const shared = theirs.body.find((p: { productId: string }) =>
+      mine.body.some((m: { productId: string }) => m.productId === p.productId),
+    );
+    expect(shared).toBeDefined();
+    const mineShared = mine.body.find((m: { productId: string }) => m.productId === shared.productId);
+    expect(mineShared.tenantId).toBe(config.tenantId);
+    expect(mineShared.price).not.toBe(shared.price);
+  });
+
+  it("keeps a shopper's carts separate per store", async () => {
+    const theirs = await api(config, "GET", "/products", { tenant: config.otherTenantId });
+    const productId: string = theirs.body[0].productId;
+
+    // Clean slate in both stores, then add only at the other store
+    for (const tenant of [config.tenantId, config.otherTenantId]) {
+      const cart = await api(config, "GET", "/cart", { token, tenant });
+      for (const item of cart.body.items) {
+        await api(config, "DELETE", `/cart/items/${item.productId}`, { token, tenant });
+      }
+    }
+    const added = await api(config, "POST", "/cart/items", {
+      token,
+      tenant: config.otherTenantId,
+      body: { productId, quantity: 1 },
+    });
+    expect(added.status).toBe(200);
+
+    const mine = await api(config, "GET", "/cart", { token });
+    expect(mine.body.items).toEqual([]);
+
+    await api(config, "DELETE", `/cart/items/${productId}`, { token, tenant: config.otherTenantId });
   });
 });

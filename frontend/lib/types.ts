@@ -1,3 +1,9 @@
+export interface Tenant {
+  tenantId: string;
+  name: string;
+  tagline: string;
+}
+
 export type ProductCategory = "cameras" | "phone-accessories";
 
 export interface Product {

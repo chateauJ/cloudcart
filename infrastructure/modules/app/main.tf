@@ -1,9 +1,19 @@
 data "aws_caller_identity" "current" {}
 
-module "products_table" {
+# Pool tenancy: one deployment serves many businesses, and every table is partitioned by tenantId,
+# so a tenant's data can only be reached with a key that names that tenant
+module "tenants_table" {
   source        = "../dynamodb"
-  table_name    = "${var.project_name}-${var.environment}-products"
-  hash_key_name = "productId"
+  table_name    = "${var.project_name}-${var.environment}-tenants"
+  hash_key_name = "tenantId"
+}
+
+module "products_table" {
+  source         = "../dynamodb"
+  table_name     = "${var.project_name}-${var.environment}-products"
+  hash_key_name  = "tenantId"
+  range_key_name = "productId" # one Query lists a tenant's whole catalog
+  range_key_type = "S"
 }
 
 module "products_lambda" {
@@ -14,20 +24,27 @@ module "products_lambda" {
 
   environment_variables = {
     PRODUCTS_TABLE_NAME = module.products_table.table_name
+    TENANTS_TABLE_NAME  = module.tenants_table.table_name
   }
 
   dynamodb_access = [
     {
-      actions       = ["dynamodb:GetItem", "dynamodb:Scan"]
+      actions       = ["dynamodb:GetItem", "dynamodb:Query"] # Query, not Scan: listing is always within one tenant
       resource_arns = [module.products_table.table_arn]
+    },
+    {
+      actions       = ["dynamodb:GetItem"]
+      resource_arns = [module.tenants_table.table_arn]
     }
   ]
 }
 
 module "carts_table" {
-  source        = "../dynamodb"
-  table_name    = "${var.project_name}-${var.environment}-carts"
-  hash_key_name = "userId"
+  source         = "../dynamodb"
+  table_name     = "${var.project_name}-${var.environment}-carts"
+  hash_key_name  = "tenantId"
+  range_key_name = "userId" # one shopper account can hold a cart at each store
+  range_key_type = "S"
 }
 
 module "cart_lambda" {
@@ -39,6 +56,7 @@ module "cart_lambda" {
   environment_variables = {
     CARTS_TABLE_NAME    = module.carts_table.table_name
     PRODUCTS_TABLE_NAME = module.products_table.table_name # to check a product exists before adding it
+    TENANTS_TABLE_NAME  = module.tenants_table.table_name
   }
 
   dynamodb_access = [
@@ -49,24 +67,30 @@ module "cart_lambda" {
     {
       actions       = ["dynamodb:GetItem"] # read-only: the cart never writes to products
       resource_arns = [module.products_table.table_arn]
+    },
+    {
+      actions       = ["dynamodb:GetItem"]
+      resource_arns = [module.tenants_table.table_arn]
     }
   ]
 }
 
 locals {
-  orders_user_index_name   = "userId-createdAt-index"
+  orders_user_index_name   = "tenantUser-createdAt-index"
   permissions_boundary_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:policy/${var.project_name}-workload-boundary"
 }
 
 module "orders_table" {
   source         = "../dynamodb"
   table_name     = "${var.project_name}-${var.environment}-orders"
-  hash_key_name  = "orderId"
+  hash_key_name  = "tenantId"
+  range_key_name = "orderId"
+  range_key_type = "S"
   stream_enabled = true
   global_secondary_indexes = [
     {
       name            = local.orders_user_index_name
-      hash_key        = "userId"
+      hash_key        = "tenantUser" # "<tenantId>#<userId>": a shopper's order history at one store
       hash_key_type   = "S"
       range_key       = "createdAt" # ISO-8601 strings sort chronologically
       range_key_type  = "S"
@@ -85,6 +109,7 @@ module "orders_lambda" {
     ORDERS_USER_INDEX_NAME = local.orders_user_index_name
     CARTS_TABLE_NAME       = module.carts_table.table_name
     PRODUCTS_TABLE_NAME    = module.products_table.table_name
+    TENANTS_TABLE_NAME     = module.tenants_table.table_name
   }
   dynamodb_access = [
     {
@@ -102,6 +127,10 @@ module "orders_lambda" {
     {
       actions       = ["dynamodb:BatchGetItem"]
       resource_arns = [module.products_table.table_arn]
+    },
+    {
+      actions       = ["dynamodb:GetItem"]
+      resource_arns = [module.tenants_table.table_arn]
     }
   ]
 }
@@ -187,6 +216,7 @@ module "api" {
     }
   }
   routes = {
+    "GET /tenant"             = { integration = "products" } # the storefront's name and tagline
     "GET /products"           = { integration = "products" }
     "GET /products/{id}"      = { integration = "products" } # {id} must match event.pathParameters.id in the handler
     "GET /cart"               = { integration = "cart", authorization_required = true }
@@ -221,6 +251,7 @@ module "monitoring" {
   event_bus_name   = module.order_events.event_bus_name
   event_rule_names = module.order_events.rule_names
   dynamodb_table_names = {
+    tenants  = module.tenants_table.table_name
     products = module.products_table.table_name
     carts    = module.carts_table.table_name
     orders   = module.orders_table.table_name

@@ -4,6 +4,7 @@ import "./globals.css";
 import { AuthProvider } from "@/lib/AuthContext";
 import { CartProvider } from "@/lib/CartContext";
 import { CatalogProvider } from "@/lib/CatalogContext";
+import { TenantProvider } from "@/lib/TenantContext";
 import Navbar from "@/components/Navbar";
 
 const geistSans = Geist({
@@ -28,14 +29,16 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
-        <AuthProvider>
-          <CatalogProvider>
-            <CartProvider>
-              <Navbar />
-              <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8">{children}</main>
-            </CartProvider>
-          </CatalogProvider>
-        </AuthProvider>
+        <TenantProvider>
+          <AuthProvider>
+            <CatalogProvider>
+              <CartProvider>
+                <Navbar />
+                <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8">{children}</main>
+              </CartProvider>
+            </CatalogProvider>
+          </AuthProvider>
+        </TenantProvider>
       </body>
     </html>
   );

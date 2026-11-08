@@ -4,10 +4,12 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { useCart } from "@/lib/CartContext";
+import { useTenant } from "@/lib/TenantContext";
 
 export default function Navbar() {
   const { user, logout } = useAuth();
   const { itemCount } = useCart();
+  const tenant = useTenant();
   const pathname = usePathname();
   const router = useRouter();
 
@@ -26,8 +28,10 @@ export default function Navbar() {
   return (
     <header className="border-b border-foreground/10">
       <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-4">
-        <Link href="/products" className="text-lg font-semibold tracking-tight">
-          CloudCart
+        <Link href="/products" className="flex items-baseline gap-2">
+          {/* The store's own name; CloudCart is the platform it runs on */}
+          <span className="text-lg font-semibold tracking-tight">{tenant?.name ?? "\u00a0"}</span>
+          <span className="text-xs text-foreground/40">on CloudCart</span>
         </Link>
 
         <nav className="flex items-center gap-6">

@@ -31,6 +31,9 @@ outputs:
   site_distribution_id:
     description: Storefront CloudFront distribution - only set when apply is true
     value: ${{ steps.outputs.outputs.site_distribution_id }}
+  storefront_tenant_id:
+    description: Tenant the storefront is built for - only set when apply is true
+    value: ${{ steps.outputs.outputs.storefront_tenant_id }}
 
 runs:
   using: composite
@@ -99,7 +102,7 @@ runs:
       run: |
         echo "api_url=$(terraform output -raw api_endpoint)" >> "$GITHUB_OUTPUT"
         {
-          for name in cognito_client_id cognito_user_pool_id site_url site_bucket_name site_distribution_id; do
+          for name in cognito_client_id cognito_user_pool_id site_url site_bucket_name site_distribution_id storefront_tenant_id; do
             echo "$name=$(terraform output -raw "$name")"
           done
         } >> "$GITHUB_OUTPUT"
