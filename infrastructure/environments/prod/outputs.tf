@@ -85,3 +85,11 @@ output "site_bucket_name" {
 output "site_distribution_id" {
   value = module.app.site_distribution_id
 }
+
+output "tenants_table_name" {
+  value = module.app.tenants_table_name
+}
+
+output "storefront_tenant_id" {
+  value = module.app.storefront_tenant_id
+}

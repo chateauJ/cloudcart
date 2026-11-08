@@ -6,12 +6,13 @@ import {
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { mockClient } from "aws-sdk-client-mock";
-import { context, logLines, orderCreatedMessage, sqsEvent } from "../../test/helpers";
+import { context, logLines, orderCreatedMessage, sqsEvent, TENANT_ID } from "../../test/helpers";
 import { handler } from "./handler";
 
 const ddb = mockClient(DynamoDBDocumentClient);
 
 const pendingOrder = {
+  tenantId: TENANT_ID,
   orderId: "order_1",
   userId: "user-1",
   status: "PENDING",
@@ -24,7 +25,7 @@ const pendingOrder = {
   updatedAt: "2026-11-01T00:00:00.000Z",
 };
 
-const orderCreated = orderCreatedMessage({ orderId: "order_1", userId: "user-1", total: "0.5" });
+const orderCreated = orderCreatedMessage({ tenantId: TENANT_ID, orderId: "order_1", userId: "user-1", total: "0.5" });
 
 // Reasons are positional: one per transaction item, products first and the order update last
 function transactionCanceled(...codes: string[]) {
@@ -36,7 +37,9 @@ function transactionCanceled(...codes: string[]) {
 }
 
 function givenOrder(order: object | undefined) {
-  ddb.on(GetCommand, { TableName: "orders-table", Key: { orderId: "order_1" } }).resolves({ Item: order });
+  ddb.on(GetCommand, { TableName: "orders-table", Key: { tenantId: TENANT_ID, orderId: "order_1" } }).resolves({
+    Item: order,
+  });
 }
 
 function outcomes() {
@@ -59,15 +62,22 @@ describe("inventory handler", () => {
       {
         Update: {
           TableName: "products-table",
-          Key: { productId: "prod_001" },
+          Key: { tenantId: TENANT_ID, productId: "prod_001" },
           ConditionExpression: "attribute_exists(productId) AND inventory >= :qty",
           ExpressionAttributeValues: { ":qty": 3 },
         },
       },
-      { Update: { TableName: "products-table", Key: { productId: "prod_002" }, ExpressionAttributeValues: { ":qty": 1 } } },
+      {
+        Update: {
+          TableName: "products-table",
+          Key: { tenantId: TENANT_ID, productId: "prod_002" },
+          ExpressionAttributeValues: { ":qty": 1 },
+        },
+      },
       {
         Update: {
           TableName: "orders-table",
+          Key: { tenantId: TENANT_ID, orderId: "order_1" },
           ConditionExpression: "#status = :pending",
           ExpressionAttributeValues: { ":complete": "COMPLETE" },
         },
@@ -85,7 +95,7 @@ describe("inventory handler", () => {
     expect(result.batchItemFailures).toEqual([]);
     expect(ddb).toHaveReceivedCommandWith(UpdateCommand, {
       TableName: "orders-table",
-      Key: { orderId: "order_1" },
+      Key: { tenantId: TENANT_ID, orderId: "order_1" },
       ConditionExpression: "#status = :pending",
       ExpressionAttributeValues: expect.objectContaining({ ":failed": "FAILED" }),
     });
@@ -148,11 +158,20 @@ describe("inventory handler", () => {
     givenOrder(pendingOrder);
 
     const result = await handler(
-      sqsEvent("not json", orderCreated, orderCreatedMessage({ userId: "user-1" })),
+      sqsEvent(
+        "not json",
+        orderCreated,
+        orderCreatedMessage({ userId: "user-1" }),
+        orderCreatedMessage({ orderId: "order_1", userId: "user-1" }), // no tenant: the order can't be addressed
+      ),
       context,
     );
 
-    expect(result.batchItemFailures).toEqual([{ itemIdentifier: "message-1" }, { itemIdentifier: "message-3" }]);
+    expect(result.batchItemFailures).toEqual([
+      { itemIdentifier: "message-1" },
+      { itemIdentifier: "message-3" },
+      { itemIdentifier: "message-4" },
+    ]);
     expect(outcomes()).toEqual(["COMPLETED"]);
   });
 
@@ -166,6 +185,7 @@ describe("inventory handler", () => {
       expect.objectContaining({
         level: "ERROR",
         message: "order processing failed",
+        tenantId: TENANT_ID,
         orderId: "order_1",
         messageId: "message-1",
         error: expect.objectContaining({ message: "Service unavailable" }),

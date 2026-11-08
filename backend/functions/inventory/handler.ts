@@ -5,6 +5,7 @@ import {
   TransactionCanceledException,
 } from "@aws-sdk/client-dynamodb";
 import { docClient } from "../../shared/dynamodb";
+import { keys } from "../../shared/keys";
 import { createLogger } from "../../shared/logger";
 import { Order, OrderCreatedDetail } from "../../shared/types";
 
@@ -28,9 +29,9 @@ export async function handler(event: SQSEvent, context: Context): Promise<SQSBat
   for (const record of event.Records) {
     let recordLog = log.child({ messageId: record.messageId });
     try {
-      const orderId = parseOrderId(record);
-      recordLog = recordLog.child({ orderId });
-      const outcome = await processOrder(orderId);
+      const { tenantId, orderId } = parseOrderRef(record);
+      recordLog = recordLog.child({ tenantId, orderId });
+      const outcome = await processOrder(tenantId, orderId);
       recordLog.info("order processed", { outcome });
     } catch (err) {
       recordLog.error("order processing failed", { error: err });
@@ -41,19 +42,22 @@ export async function handler(event: SQSEvent, context: Context): Promise<SQSBat
   return { batchItemFailures };
 }
 
-function parseOrderId(record: SQSRecord): string {
+// The tenant comes from the event, which the Pipe built from the order's own stream record -
+// trusted data, unlike a request header, so there's no tenant lookup here
+function parseOrderRef(record: SQSRecord): { tenantId: string; orderId: string } {
   // The SQS body is the whole EventBridge event; the Pipe's template output is its detail
   const event = JSON.parse(record.body) as { detail?: Partial<OrderCreatedDetail> };
+  const tenantId = event.detail?.tenantId;
   const orderId = event.detail?.orderId;
-  if (typeof orderId !== "string" || orderId === "") {
-    throw new Error("Message is not an OrderCreated event with a detail.orderId");
+  if (typeof tenantId !== "string" || tenantId === "" || typeof orderId !== "string" || orderId === "") {
+    throw new Error("Message is not an OrderCreated event with a detail.tenantId and detail.orderId");
   }
-  return orderId;
+  return { tenantId, orderId };
 }
 
-async function processOrder(orderId: string): Promise<Outcome> {
+async function processOrder(tenantId: string, orderId: string): Promise<Outcome> {
   const result = await docClient.send(
-    new GetCommand({ TableName: ORDERS_TABLE_NAME, Key: { orderId } }),
+    new GetCommand({ TableName: ORDERS_TABLE_NAME, Key: keys.order(tenantId, orderId) }),
   );
   const order = result.Item as Order | undefined;
 
@@ -83,7 +87,7 @@ async function processOrder(orderId: string): Promise<Outcome> {
       return "ALREADY_PROCESSED";
     }
     if (productReasons.some((reason) => reason.Code === "ConditionalCheckFailed")) {
-      await markFailed(order.orderId, "Insufficient inventory for one or more items");
+      await markFailed(order, "Insufficient inventory for one or more items");
       return "FAILED_INSUFFICIENT_INVENTORY";
     }
     // Throttling, TransactionConflict, etc. are transient - rethrow so the message is retried
@@ -103,7 +107,7 @@ async function reserveInventoryAndComplete(order: Order): Promise<void> {
         ...order.items.map((item) => ({
           Update: {
             TableName: PRODUCTS_TABLE_NAME,
-            Key: { productId: item.productId },
+            Key: keys.product(order.tenantId, item.productId),
             UpdateExpression: "SET inventory = inventory - :qty",
             ConditionExpression: "attribute_exists(productId) AND inventory >= :qty",
             ExpressionAttributeValues: { ":qty": item.quantity },
@@ -112,7 +116,7 @@ async function reserveInventoryAndComplete(order: Order): Promise<void> {
         {
           Update: {
             TableName: ORDERS_TABLE_NAME,
-            Key: { orderId: order.orderId },
+            Key: keys.order(order.tenantId, order.orderId),
             UpdateExpression: "SET #status = :complete, updatedAt = :now",
             ConditionExpression: "#status = :pending",
             // "status" is a DynamoDB reserved word, so it must be aliased
@@ -125,12 +129,12 @@ async function reserveInventoryAndComplete(order: Order): Promise<void> {
   );
 }
 
-async function markFailed(orderId: string, reason: string): Promise<void> {
+async function markFailed(order: Order, reason: string): Promise<void> {
   try {
     await docClient.send(
       new UpdateCommand({
         TableName: ORDERS_TABLE_NAME,
-        Key: { orderId },
+        Key: keys.order(order.tenantId, order.orderId),
         UpdateExpression: "SET #status = :failed, failureReason = :reason, updatedAt = :now",
         ConditionExpression: "#status = :pending",
         ExpressionAttributeNames: { "#status": "status" },

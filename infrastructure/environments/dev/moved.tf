@@ -67,18 +67,3 @@ moved { # module.monitoring
   from = module.monitoring
   to   = module.app.module.monitoring
 }
-
-moved { # aws_dynamodb_table_item.prod_004
-  from = aws_dynamodb_table_item.prod_004
-  to   = module.app.aws_dynamodb_table_item.prod_004
-}
-
-moved { # aws_dynamodb_table_item.prod_010
-  from = aws_dynamodb_table_item.prod_010
-  to   = module.app.aws_dynamodb_table_item.prod_010
-}
-
-moved { # aws_dynamodb_table_item.prod_005
-  from = aws_dynamodb_table_item.prod_005
-  to   = module.app.aws_dynamodb_table_item.prod_005
-}

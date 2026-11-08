@@ -30,3 +30,8 @@ variable "enable_password_auth_flow" {
 variable "cognito_deletion_protection" {
   type = string
 }
+
+variable "storefront_tenant_id" {
+  type    = string
+  default = "northlight" # which seeded business the hosted storefront is built for
+}

@@ -2,6 +2,7 @@ import { context, logLines, orderCreatedMessage, snsEvent } from "../../test/hel
 import { handler } from "./handler";
 
 const detail = {
+  tenantId: "northlight",
   orderId: "order_1",
   userId: "user-1",
   total: "329.99",
@@ -26,6 +27,7 @@ describe("notifications handler", () => {
   it.each([
     ["not JSON", "not json"],
     ["no detail", JSON.stringify({ source: "cloudcart.orders" })],
+    ["a missing tenantId", orderCreatedMessage({ ...detail, tenantId: undefined })],
     ["a missing orderId", orderCreatedMessage({ ...detail, orderId: undefined })],
     // Pipes delivers DynamoDB numbers as strings - a numeric total means the contract changed
     ["a numeric total", orderCreatedMessage({ ...detail, total: 329.99 })],

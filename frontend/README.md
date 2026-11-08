@@ -31,6 +31,10 @@ npm run preview   # serves out/ at http://localhost:3000 with the same URL rules
 
 The hosted storefront's URL is the `site_url` Terraform output.
 
+Each build is one store's storefront: `NEXT_PUBLIC_TENANT_ID` (written by `env:dev` from the
+`storefront_tenant_id` output) is sent as `X-Tenant-Id` on every API call. To run the other seeded
+store locally, use `TENANT_ID=tidewater npm run env:dev`.
+
 The API only accepts browser requests from `http://localhost:3000` (its CORS setting), so keep the
 default port.
 
@@ -62,6 +66,7 @@ Before recording, it empties that user's cart off camera, so every take starts t
 | `lib/AuthContext.tsx` | Cognito sign-up, email confirmation, sign-in and sign-out |
 | `lib/CartContext.tsx` | The signed-in user's cart; every change round-trips the Cart API |
 | `lib/CatalogContext.tsx` | Product names and prices for the cart, checkout and order pages |
+| `lib/TenantContext.tsx` | The store's name and tagline, for the navbar and catalog header |
 
 New orders start as `PENDING`. The order page polls until the asynchronous inventory flow (DynamoDB
 Streams → EventBridge Pipe → SQS → Inventory Lambda) marks the order `COMPLETE` or `FAILED`.

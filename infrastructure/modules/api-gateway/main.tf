@@ -5,7 +5,7 @@ resource "aws_apigatewayv2_api" "this" {
   cors_configuration { # CORS lives on the API, not in each Lambda (spec.md §2)
     allow_origins = var.cors_allow_origins
     allow_methods = ["GET", "POST", "DELETE", "OPTIONS"]
-    allow_headers = ["authorization", "content-type"] # authorization: Cognito JWT 
+    allow_headers = ["authorization", "content-type", "x-tenant-id"] # authorization: Cognito JWT; x-tenant-id: which store
     max_age       = 300
   }
 }

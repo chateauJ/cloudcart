@@ -1,10 +1,10 @@
-// Client for the CloudCart HTTP API (spec.md §12). Products are public; cart and order calls
-// attach the signed-in user's Cognito access token, and the API derives the user from it -
-// nothing here ever sends a user ID.
+// Client for the CloudCart HTTP API (spec.md §12). Every call names the store with X-Tenant-Id.
+// Products are public; cart and order calls attach the signed-in user's Cognito access token,
+// and the API derives the user from it - nothing here ever sends a user ID.
 
 import { fetchAuthSession } from "aws-amplify/auth";
 import { config } from "./config";
-import { Cart, Order, Product } from "./types";
+import { Cart, Order, Product, Tenant } from "./types";
 
 // Every handler returns errors as { error: { code, message } } (backend/shared/responses.ts)
 export class ApiError extends Error {
@@ -31,7 +31,7 @@ async function request<T>(
   path: string,
   options: { auth?: boolean; body?: unknown } = {},
 ): Promise<T> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { "X-Tenant-Id": config.tenantId };
   if (options.auth) headers.Authorization = `Bearer ${await accessToken()}`;
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
 
@@ -52,6 +52,10 @@ async function request<T>(
     throw new ApiError(res.status, code, message);
   }
   return data as T;
+}
+
+export function getTenant(): Promise<Tenant> {
+  return request<Tenant>("GET", "/tenant");
 }
 
 export function listProducts(): Promise<Product[]> {

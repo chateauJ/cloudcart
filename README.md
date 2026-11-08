@@ -15,12 +15,14 @@ A serverless, event-driven e-commerce backend on AWS. Every resource is defined 
 | Async order processing (DynamoDB Streams → EventBridge Pipe → SQS/SNS) | Done |
 | Observability (CloudWatch alarms, dashboard, saved Logs Insights queries, X-Ray) | Done |
 | Least-privilege IAM review and CI permissions boundary | Done |
-| Unit tests (57 Jest tests, coverage floor enforced in CI) | Done |
+| Unit tests (77 Jest tests, coverage floor enforced in CI) | Done |
 | Integration test suite against the deployed API | Done |
 | CI on pull requests, deploy to dev on merge to `main` | Done |
 | Shared `app` module wiring each environment | Done |
 | prod environment and the approval-gated prod stages of the deploy pipeline | Done |
 | Frontend wired to the real API and Cognito, with a seeded 12-product catalog | Done |
+| Static storefront on S3 + CloudFront, deployed by the pipeline | Done |
+| Multi-tenancy: every table partitioned by tenant, two seeded stores | Done |
 
 ## Architecture
 
@@ -96,6 +98,7 @@ The API answers checkout before inventory is reserved, so a slow or failing inve
 - **Idempotent consumer without an idempotency table.** SQS and Pipes both deliver at least once. The inventory Lambda decrements stock with `ConditionExpression: inventory >= :qty`, which also prevents overselling, and moves order status only from the expected prior state. A redelivered message fails the condition and is treated as already processed.
 - **Transactional checkout.** `POST /orders` uses `TransactWriteItems` to create the order and clear the cart together. A condition on the cart's `updatedAt` rejects a checkout against a cart that changed mid-request. Cart writes use the same optimistic-concurrency check.
 - **Partial batch failures.** The inventory Lambda reports failed message IDs individually, so one bad message is retried without re-running the rest of the batch.
+- **Pool multi-tenancy.** One deployment serves many businesses. Every table's partition key is `tenantId`, every request names its store with `X-Tenant-Id` (checked against a `tenants` table), and every DynamoDB key is built by one helper that takes the tenant first, so no handler can address another store's data by ID alone. A shopper's single Cognito account works at every store, with a separate cart and order history at each. Listing a catalog is a `Query` on the tenant's partition rather than a `Scan` of the table.
 - **Separate directories per environment, not workspaces.** Each environment is its own root module and state file, so applying to the wrong one takes an explicit `cd`. Both call the same `modules/app`, and they differ only in a handful of arguments.
 
 ## Tech stack
@@ -115,8 +118,11 @@ The API answers checkout before inventory is reserved, so a slow or failing inve
 
 ## API
 
+Every request names its store with an `X-Tenant-Id` header (for example `northlight`). A missing or malformed header returns 400 and an unknown store 404, before any store data is read.
+
 | Method | Route | Auth | Lambda |
 | --- | --- | --- | --- |
+| GET | `/tenant` — the store's name and tagline | public | products |
 | GET | `/products` | public | products |
 | GET | `/products/{id}` | public | products |
 | GET | `/cart` | JWT | cart |
@@ -202,7 +208,7 @@ npm test
 npm run test:coverage
 ```
 
-The integration suite runs the full golden path against a deployed environment: sign in, list products, add to cart, check out, poll until the order completes, then check that stock went down. It needs a confirmed Cognito test user.
+The integration suite runs the full golden path against a deployed environment: sign in, list products, add to cart, check out, poll until the order completes, then check that stock went down. It also checks tenant isolation between the two seeded stores (`northlight` and `tidewater`): each has its own catalog where product IDs overlap, its own cart for the same shopper, and can't see the other's orders. It needs a confirmed Cognito test user.
 
 ```bash
 cd backend

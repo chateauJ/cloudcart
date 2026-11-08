@@ -1,0 +1,12 @@
+[
+  {
+    "tenantId": "northlight",
+    "name": "Northlight Camera Co.",
+    "tagline": "Cameras and phone accessories."
+  },
+  {
+    "tenantId": "tidewater",
+    "name": "Tidewater Mobile",
+    "tagline": "Phone accessories for life on the go."
+  }
+]

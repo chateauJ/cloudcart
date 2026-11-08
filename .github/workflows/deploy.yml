@@ -53,6 +53,7 @@ jobs:
           api-url: ${{ steps.terraform.outputs.api_url }}
           user-pool-id: ${{ steps.terraform.outputs.cognito_user_pool_id }}
           client-id: ${{ steps.terraform.outputs.cognito_client_id }}
+          tenant-id: ${{ steps.terraform.outputs.storefront_tenant_id }}
           bucket: ${{ steps.terraform.outputs.site_bucket_name }}
           distribution-id: ${{ steps.terraform.outputs.site_distribution_id }}
 
@@ -128,6 +129,7 @@ jobs:
     outputs:
       api_url: ${{ steps.terraform.outputs.api_url }}
       site_url: ${{ steps.terraform.outputs.site_url }}
+      tenant_id: ${{ steps.terraform.outputs.storefront_tenant_id }}
     env:
       TF_VAR_alarm_email: ${{ secrets.ALARM_EMAIL }} # repository secret - stands in for the gitignored local.auto.tfvars
     steps:
@@ -147,6 +149,7 @@ jobs:
           api-url: ${{ steps.terraform.outputs.api_url }}
           user-pool-id: ${{ steps.terraform.outputs.cognito_user_pool_id }}
           client-id: ${{ steps.terraform.outputs.cognito_client_id }}
+          tenant-id: ${{ steps.terraform.outputs.storefront_tenant_id }}
           bucket: ${{ steps.terraform.outputs.site_bucket_name }}
           distribution-id: ${{ steps.terraform.outputs.site_distribution_id }}
 
@@ -161,10 +164,11 @@ jobs:
         env:
           API_URL: ${{ needs.deploy-prod.outputs.api_url }}
           SITE_URL: ${{ needs.deploy-prod.outputs.site_url }}
+          TENANT_ID: ${{ needs.deploy-prod.outputs.tenant_id }}
         run: |
           code() { curl -s -o /dev/null -w '%{http_code}' --retry 3 --retry-all-errors "$@"; }
-          products=$(code "$API_URL/products")
-          cart=$(code "$API_URL/cart")
+          products=$(code -H "X-Tenant-Id: $TENANT_ID" "$API_URL/products")
+          cart=$(code -H "X-Tenant-Id: $TENANT_ID" "$API_URL/cart")
           page=$(code "$SITE_URL/products/")
           echo "GET /products -> $products (want 200), GET /cart without a token -> $cart (want 401), storefront /products/ -> $page (want 200)"
           [ "$products" = "200" ] && [ "$cart" = "401" ] && [ "$page" = "200" ]

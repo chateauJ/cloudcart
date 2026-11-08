@@ -4,6 +4,7 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import * as api from "@/lib/api";
+import { useTenant } from "@/lib/TenantContext";
 import { Product } from "@/lib/types";
 import ProductCard from "@/components/ProductCard";
 
@@ -24,6 +25,7 @@ export default function ProductsPage() {
 
 function ProductGrid() {
   const category = useSearchParams().get("category") ?? "";
+  const tenant = useTenant();
   const [products, setProducts] = useState<Product[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,7 +57,7 @@ function ProductGrid() {
       <div className="mb-6 flex items-end justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Products</h1>
-          <p className="mt-1 text-sm text-foreground/60">Cameras and phone accessories.</p>
+          <p className="mt-1 text-sm text-foreground/60">{tenant?.tagline ?? "\u00a0"}</p>
         </div>
         <div className="flex gap-2">
           {CATEGORIES.map((c) => (

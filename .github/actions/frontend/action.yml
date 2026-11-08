@@ -11,6 +11,9 @@ inputs:
   client-id:
     description: Cognito app client ID
     required: true
+  tenant-id:
+    description: The store this storefront is built for (sent as X-Tenant-Id)
+    required: true
   bucket:
     description: Site bucket name
     required: true
@@ -35,6 +38,7 @@ runs:
         NEXT_PUBLIC_API_URL: ${{ inputs.api-url }}
         NEXT_PUBLIC_COGNITO_USER_POOL_ID: ${{ inputs.user-pool-id }}
         NEXT_PUBLIC_COGNITO_CLIENT_ID: ${{ inputs.client-id }}
+        NEXT_PUBLIC_TENANT_ID: ${{ inputs.tenant-id }}
       run: |
         npm ci
         npm run build

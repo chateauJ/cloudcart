@@ -1,13 +1,24 @@
 import { ConditionalCheckFailedException } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, GetCommand, PutCommand } from "@aws-sdk/lib-dynamodb";
 import { mockClient } from "aws-sdk-client-mock";
-import { apiEvent, context, logLines, parseResponse, USER_ID } from "../../test/helpers";
+import {
+  apiEvent,
+  context,
+  dataCalls,
+  logLines,
+  parseResponse,
+  TENANT,
+  TENANT_ID,
+  TENANTS_TABLE,
+  USER_ID,
+} from "../../test/helpers";
 import { handler } from "./handler";
 
 const ddb = mockClient(DynamoDBDocumentClient);
 
 const PREVIOUS_UPDATED_AT = "2026-11-01T00:00:00.000Z";
 const savedCart = {
+  tenantId: TENANT_ID,
   userId: USER_ID,
   items: [{ productId: "prod_001", quantity: 1 }],
   updatedAt: PREVIOUS_UPDATED_AT,
@@ -29,7 +40,10 @@ function savedItem() {
   return ddb.commandCalls(PutCommand)[0].args[0].input;
 }
 
-beforeEach(() => ddb.reset());
+beforeEach(() => {
+  ddb.reset();
+  ddb.on(GetCommand, { TableName: TENANTS_TABLE }).resolves({ Item: TENANT });
+});
 
 describe("cart handler", () => {
   it("rejects a request without a verified user before touching DynamoDB", async () => {
@@ -46,7 +60,26 @@ describe("cart handler", () => {
     const res = parseResponse(await handler(apiEvent({ routeKey: "GET /cart", userId: USER_ID }), context));
 
     expect(res.statusCode).toBe(200);
-    expect(res.body).toEqual({ userId: USER_ID, items: [] });
+    expect(res.body).toEqual({ tenantId: TENANT_ID, userId: USER_ID, items: [] });
+  });
+
+  it("reads the cart by tenant and user, so each store keeps its own cart for the same shopper", async () => {
+    givenCart(structuredClone(savedCart));
+
+    await handler(apiEvent({ routeKey: "GET /cart", userId: USER_ID }), context);
+
+    expect(ddb).toHaveReceivedCommandWith(GetCommand, {
+      TableName: "carts-table",
+      Key: { tenantId: TENANT_ID, userId: USER_ID },
+    });
+  });
+
+  it("rejects a request without a tenant before reading the cart", async () => {
+    const res = parseResponse(await handler(apiEvent({ routeKey: "GET /cart", userId: USER_ID, tenantId: null }), context));
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error.code).toBe("TENANT_REQUIRED");
+    expect(dataCalls(ddb.calls())).toHaveLength(0);
   });
 
   describe("POST /cart/items", () => {
@@ -60,7 +93,13 @@ describe("cart handler", () => {
       expect(res.body.items).toEqual([{ productId: "prod_001", quantity: 2 }]);
       expect(savedItem()).toMatchObject({
         TableName: "carts-table",
+        Item: { tenantId: TENANT_ID, userId: USER_ID },
         ConditionExpression: "attribute_not_exists(userId)",
+      });
+      // The product must exist in this store's catalog, not just anywhere
+      expect(ddb).toHaveReceivedCommandWith(GetCommand, {
+        TableName: "products-table",
+        Key: { tenantId: TENANT_ID, productId: "prod_001" },
       });
     });
 
@@ -105,12 +144,12 @@ describe("cart handler", () => {
       ["fractional quantity", { productId: "prod_001", quantity: 1.5 }],
       ["quantity over the limit", { productId: "prod_001", quantity: 100 }],
       ["quantity as a string", { productId: "prod_001", quantity: "2" }],
-    ])("rejects an invalid body (%s) without touching DynamoDB", async (_case, body) => {
+    ])("rejects an invalid body (%s) without touching the cart or catalog", async (_case, body) => {
       const res = parseResponse(await addItem(body));
 
       expect(res.statusCode).toBe(400);
       expect(res.body.error.code).toBe("INVALID_REQUEST");
-      expect(ddb.calls()).toHaveLength(0);
+      expect(dataCalls(ddb.calls())).toHaveLength(0);
     });
 
     it("returns 404 for a product that doesn't exist and leaves the cart alone", async () => {
