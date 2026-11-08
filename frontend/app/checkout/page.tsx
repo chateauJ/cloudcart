@@ -31,7 +31,7 @@ export default function CheckoutPage() {
     try {
       const order = await api.createOrder();
       await refresh(); // the API cleared the cart in the same transaction that created the order
-      router.push(`/orders/${order.orderId}`);
+      router.push(`/order?id=${encodeURIComponent(order.orderId)}`);
     } catch (err) {
       setError(api.errorMessage(err, "Could not place order"));
       setIsPlacingOrder(false);

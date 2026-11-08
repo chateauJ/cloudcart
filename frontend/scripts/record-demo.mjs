@@ -1,5 +1,5 @@
 // Records the README demo: a real browser session against a running storefront (npm run build &&
-// npm start, pointed at dev by npm run env:dev). Headless Chrome is driven over the DevTools
+// npm run preview, pointed at dev by npm run env:dev). Headless Chrome is driven over the DevTools
 // protocol with no extra packages; ffmpeg turns the captured frames into an MP4 and a GIF.
 //
 // Usage: npm run demo:record
@@ -235,7 +235,10 @@ const byText = (selector, text) =>
     return (t === ${JSON.stringify(text)} || t.startsWith(${JSON.stringify(text + " ")})) && el.offsetParent !== null;
   })`;
 const bySelector = (selector) => `document.querySelector(${JSON.stringify(selector)})`;
-const path = (expected) => `location.pathname === ${JSON.stringify(expected)}`;
+// trailingSlash: true serves /products as /products/, so compare without it
+const path = (expected) => `location.pathname.replace(/(.)\\/$/, "$1") === ${JSON.stringify(expected)}`;
+// Product links are /product?id=<id> (written with or without the trailing slash)
+const productLink = (id) => `a[href*="?id=${id}"]`;
 
 async function logIn(b, { email, password }) {
   await b.click(byText("header a", "Log in"));
@@ -267,7 +270,7 @@ async function resetCart(b, credentials) {
 async function demo(b, credentials) {
   // A shopper lands on the catalog, which the Products API serves from DynamoDB
   await b.goto("/products");
-  await b.waitFor(bySelector('a[href="/products/prod_012"]'));
+  await b.waitFor(bySelector(productLink("prod_012")));
   await sleep(1800);
   await b.moveTo(640, 420, 900);
   await b.scrollTo(720, 1800);
@@ -278,7 +281,7 @@ async function demo(b, credentials) {
   await sleep(1200);
 
   // Two products into the cart
-  await b.click(bySelector('a[href="/products/prod_003"]'));
+  await b.click(bySelector(productLink("prod_003")));
   await b.waitFor(byText("button", "Add to cart"));
   await sleep(1500);
   await b.click(byText("button", "Add to cart"));
@@ -288,7 +291,7 @@ async function demo(b, credentials) {
   await b.click(byText("header a", "Products"));
   await b.waitFor(path("/products"));
   await sleep(900);
-  await b.click(bySelector('a[href="/products/prod_010"]'));
+  await b.click(bySelector(productLink("prod_010")));
   await b.waitFor(byText("button", "Add to cart"));
   await sleep(1300);
   await b.click(byText("button", "Add to cart"));
@@ -297,9 +300,9 @@ async function demo(b, credentials) {
 
   // Cart: bump the charger to 2
   await b.click(byText("header a", "Cart"));
-  await b.waitFor(bySelector('a[href="/products/prod_010"]'));
+  await b.waitFor(bySelector(productLink("prod_010")));
   await sleep(1500);
-  const chargerQty = `document.querySelector('a[href="/products/prod_010"]').closest(".py-4").querySelector("input")`;
+  const chargerQty = `document.querySelector('${productLink("prod_010")}').closest(".py-4").querySelector("input")`;
   await b.click(chargerQty);
   await b.evaluate(`(${chargerQty}).select()`);
   await sleep(300);
@@ -315,7 +318,7 @@ async function demo(b, credentials) {
   await b.click(byText("button", "Place order"));
 
   // DynamoDB Streams -> EventBridge Pipe -> SQS -> Inventory Lambda completes it a few seconds later
-  await b.waitFor(`location.pathname.startsWith("/orders/ord")`);
+  await b.waitFor(path("/order"));
   await b.waitFor(byText("span", "COMPLETE"), 60_000);
   await sleep(3000);
 
@@ -333,7 +336,7 @@ function ffmpeg(args) {
 async function main() {
   const credentials = loadCredentials();
   const res = await fetch(`${BASE_URL}/products`).catch(() => null);
-  if (!res?.ok) throw new Error(`No storefront at ${BASE_URL} - run npm run build && npm start first`);
+  if (!res?.ok) throw new Error(`No storefront at ${BASE_URL} - run npm run build && npm run preview first`);
 
   const workDir = mkdtempSync(join(tmpdir(), "cloudcart-demo-"));
   const framesDir = join(workDir, "frames");

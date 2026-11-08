@@ -26,7 +26,8 @@ A serverless, event-driven e-commerce backend on AWS. Every resource is defined 
 
 ```mermaid
 flowchart LR
-    client[Next.js storefront] -->|HTTPS + Cognito JWT| api[API Gateway HTTP API]
+    cdn[CloudFront + private S3] -->|static storefront| client[Browser]
+    client -->|HTTPS + Cognito JWT| api[API Gateway HTTP API]
     cognito[Cognito User Pool] -. issues / validates JWTs .- api
     api --> products[products λ] --> pt[(products)]
     api --> cart[cart λ] --> ct[(carts)]
@@ -144,17 +145,18 @@ infrastructure/
   bootstrap/                    # one-time: state bucket, lock table, GitHub OIDC provider, deploy role, boundary
   modules/
     app/                        # wires every module below into one environment
-    api-gateway/ cognito/ dynamodb/ lambda/ order-events/ sqs/ sns/ monitoring/
+    api-gateway/ cognito/ dynamodb/ lambda/ order-events/ sqs/ sns/ monitoring/ static-site/
   environments/
     dev/                        # root module + state for dev
     prod/                       # root module + state for prod
-frontend/                       # Next.js demo storefront: real API + Cognito (SRP) sign-in
+frontend/                       # Next.js storefront, a static export: real API + Cognito (SRP) sign-in
 docs/demo/                      # demo MP4 and GIF, recorded by frontend/scripts/record-demo.mjs
 docs/screenshots/               # images used in this README
 .github/
   workflows/test.yml            # PR checks, also reused by deploy.yml
   workflows/deploy.yml          # main → dev → smoke test → prod plan → approval → prod
   actions/terraform/            # composite action: build bundles, assume role, plan/apply
+  actions/frontend/             # composite action: build the static export, upload to S3, invalidate CloudFront
 ```
 
 ## Getting started
@@ -220,7 +222,7 @@ npm run env:dev   # writes .env.local from the dev Terraform outputs
 npm run dev
 ```
 
-Open http://localhost:3000 (the API's CORS setting only allows this origin). Sign up with a real email address: Cognito emails a confirmation code, and sign-in then uses SRP, so the password never leaves the browser. See [`frontend/README.md`](frontend/README.md) for how the client maps to the API and how to re-record the demo.
+Open http://localhost:3000 (the API's CORS setting allows only this origin and the hosted storefront's CloudFront URL). Sign up with a real email address: Cognito emails a confirmation code, and sign-in then uses SRP, so the password never leaves the browser. See [`frontend/README.md`](frontend/README.md) for how the client maps to the API and how to re-record the demo.
 
 ## CI/CD
 
@@ -241,11 +243,11 @@ flowchart LR
 **`deploy.yml`** runs on push to `main`:
 
 1. Reruns `test.yml`, so `main` can't deploy anything a PR wouldn't pass.
-2. **Deploy dev:** builds the bundles, assumes the deploy role through OIDC, then plans and applies the saved plan.
-3. **Smoke test dev:** runs the integration suite against the API that was just deployed.
+2. **Deploy dev:** builds the bundles, assumes the deploy role through OIDC, then plans and applies the saved plan. It then builds the storefront against dev's API and Cognito, uploads it to S3 and invalidates CloudFront.
+3. **Smoke test dev:** runs the integration suite against the API that was just deployed, then checks that the storefront serves a page (200) and a missing page (404) through CloudFront.
 4. **Plan prod:** plans without applying, so the reviewer can read it first.
-5. **Deploy prod:** waits for a required reviewer on the `prod` GitHub Environment, then re-plans and applies.
-6. **Smoke test prod:** `GET /products` must return 200 and an anonymous `GET /cart` must return 401.
+5. **Deploy prod:** waits for a required reviewer on the `prod` GitHub Environment, then re-plans, applies, and deploys the storefront the same way.
+6. **Smoke test prod:** `GET /products` must return 200, an anonymous `GET /cart` must return 401, and the storefront's `/products/` page must return 200.
 
 Deploys queue rather than cancel, because interrupting `terraform apply` can leave state locked.
 
@@ -257,6 +259,7 @@ Deploys queue rather than cancel, because interrupting `terraform apply` can lea
 - **No privilege escalation from CI.** The deploy role can create IAM roles only if they carry the `cloudcart-workload-boundary` permissions boundary. It also can't detach or edit that boundary.
 - **Least-privilege Lambda roles.** Each function gets only the DynamoDB actions it uses, on its own tables, and log permissions on its own log group. For example, the orders role has no EventBridge access, and the cart role can only read `products`.
 - **Identity from the token.** Cart and order operations take the user ID from the verified JWT, never from the request.
+- **Private storefront bucket.** The site bucket blocks all public access. CloudFront reads it through Origin Access Control, and the bucket policy admits only that one distribution. CloudFront adds standard security headers (HSTS, `nosniff`, frame and referrer policies) and AWS Shield Standard DDoS protection.
 - **Pinned Actions.** Third-party Actions are pinned to commit SHAs, and checkout doesn't persist credentials.
 
 ## Monitoring
@@ -285,6 +288,7 @@ Nothing in the design bills while it sits idle:
 - ARM64 Lambdas: about 20% cheaper per GB-second than x86.
 - HTTP API instead of REST API: about 70% cheaper per request, with a free native JWT authorizer.
 - No VPC, so no NAT gateway. Every service is reached through its public AWS endpoint.
+- A static storefront on S3 + CloudFront instead of a server: CloudFront's always-free tier covers 1 TB and 10 million requests a month.
 - No provisioned concurrency, caching layer or custom domain.
 
 ## Out of scope

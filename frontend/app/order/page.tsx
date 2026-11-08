@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { useCatalog } from "@/lib/CatalogContext";
 import * as api from "@/lib/api";
@@ -12,8 +12,18 @@ import OrderStatusBadge from "@/components/OrderStatusBadge";
 const POLL_INTERVAL_MS = 1500;
 const POLL_TIMEOUT_MS = 60_000; // stop polling a stuck order rather than hitting the API forever
 
-export default function OrderDetailPage() {
-  const { id } = useParams<{ id: string }>();
+// /order?id=<orderId>: order IDs are created at runtime, so a static export can't pre-build a
+// page per order - the ID is a query parameter instead (useSearchParams needs the Suspense boundary)
+export default function OrderPage() {
+  return (
+    <Suspense>
+      <OrderDetail />
+    </Suspense>
+  );
+}
+
+function OrderDetail() {
+  const id = useSearchParams().get("id") ?? "";
   const { user, isLoading } = useAuth();
   const { productById } = useCatalog();
   const router = useRouter();

@@ -54,7 +54,7 @@ export default function OrdersPage() {
         {orders.map((order) => (
           <Link
             key={order.orderId}
-            href={`/orders/${order.orderId}`}
+            href={`/order?id=${encodeURIComponent(order.orderId)}`}
             className="flex items-center justify-between px-4 py-4 hover:bg-foreground/5"
           >
             <div>

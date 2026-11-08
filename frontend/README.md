@@ -1,9 +1,12 @@
 # CloudCart frontend
 
-A thin Next.js storefront for demoing the CloudCart API. It runs locally against a deployed
-environment; it isn't deployed to AWS itself.
+A thin Next.js storefront for demoing the CloudCart API. It's a static export (`output: "export"`):
+plain HTML, CSS and JS that the deploy pipeline uploads to S3 and serves through CloudFront. There's
+no Node.js server, and every page fetches its data in the browser.
 
-- **Products** are public and rendered on the server per request, so stock levels are current.
+- **Products** are public and fetched on every page visit, so stock levels are current.
+- **Pages for a specific product or order** take the ID as a query parameter (`/product?id=…`,
+  `/order?id=…`). A static export can only pre-build pages for IDs known at build time.
 - **Sign-up, sign-in and the session** use Amazon Cognito through Amplify. Sign-in uses SRP, so the
   password never leaves the browser.
 - **Cart and orders** call the API with the Cognito access token. The API derives the user from the
@@ -18,6 +21,15 @@ npm install
 npm run env:dev   # writes .env.local from the dev Terraform outputs (env:prod for prod)
 npm run dev       # http://localhost:3000
 ```
+
+To check the production build as CloudFront will serve it:
+
+```bash
+npm run build     # writes the static export to out/
+npm run preview   # serves out/ at http://localhost:3000 with the same URL rules as CloudFront
+```
+
+The hosted storefront's URL is the `site_url` Terraform output.
 
 The API only accepts browser requests from `http://localhost:3000` (its CORS setting), so keep the
 default port.
@@ -35,7 +47,7 @@ CLOUDCART_DEMO_PASSWORD=...
 ```
 
 ```bash
-npm run build && npm start   # production build, so no Next.js dev overlay is recorded
+npm run build && npm run preview   # production build, so no Next.js dev overlay is recorded
 npm run demo:record          # in a second terminal
 ```
 

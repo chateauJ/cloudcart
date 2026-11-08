@@ -10,7 +10,7 @@ const CATEGORY_LABEL: Record<string, string> = {
 export default function ProductCard({ product }: { product: Product }) {
   return (
     <Link
-      href={`/products/${product.productId}`}
+      href={`/product?id=${encodeURIComponent(product.productId)}`}
       className="group flex flex-col rounded-lg border border-foreground/10 p-4 transition-colors hover:border-foreground/30"
     >
       <ProductImage

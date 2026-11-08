@@ -73,3 +73,15 @@ output "ops_alerts_topic_arn" {
 output "dashboard_url" {
   value = module.app.dashboard_url
 }
+
+output "site_url" {
+  value = module.app.site_url
+}
+
+output "site_bucket_name" {
+  value = module.app.site_bucket_name
+}
+
+output "site_distribution_id" {
+  value = module.app.site_distribution_id
+}

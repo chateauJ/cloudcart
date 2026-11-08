@@ -28,13 +28,14 @@ jobs:
     timeout-minutes: 30
     environment:
       name: dev # the role's trust policy accepts this job's token only because of this line
-      url: ${{ steps.terraform.outputs.api_url }}
+      url: ${{ steps.terraform.outputs.site_url }}
     permissions:
       contents: read
       id-token: write # lets the job request the OIDC token it trades for AWS credentials
     outputs:
       api_url: ${{ steps.terraform.outputs.api_url }}
       cognito_client_id: ${{ steps.terraform.outputs.cognito_client_id }}
+      site_url: ${{ steps.terraform.outputs.site_url }}
     env:
       TF_VAR_alarm_email: ${{ secrets.ALARM_EMAIL }} # repository secret - stands in for the gitignored local.auto.tfvars
     steps:
@@ -47,6 +48,13 @@ jobs:
           environment: dev
           apply: "true"
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+      - uses: ./.github/actions/frontend
+        with:
+          api-url: ${{ steps.terraform.outputs.api_url }}
+          user-pool-id: ${{ steps.terraform.outputs.cognito_user_pool_id }}
+          client-id: ${{ steps.terraform.outputs.cognito_client_id }}
+          bucket: ${{ steps.terraform.outputs.site_bucket_name }}
+          distribution-id: ${{ steps.terraform.outputs.site_distribution_id }}
 
   smoke-test-dev:
     name: Smoke test dev
@@ -74,6 +82,15 @@ jobs:
           CLOUDCART_COGNITO_CLIENT_ID: ${{ needs.deploy-dev.outputs.cognito_client_id }}
           CLOUDCART_TEST_USERNAME: ${{ vars.CLOUDCART_TEST_USERNAME }}
           CLOUDCART_TEST_PASSWORD: ${{ secrets.CLOUDCART_TEST_PASSWORD }}
+      - name: Storefront serves through CloudFront
+        env:
+          SITE_URL: ${{ needs.deploy-dev.outputs.site_url }}
+        run: |
+          code() { curl -s -o /dev/null -w '%{http_code}' --retry 3 --retry-all-errors "$@"; }
+          page=$(code "$SITE_URL/products/")
+          missing=$(code "$SITE_URL/no-such-page/")
+          echo "GET /products/ -> $page (want 200), GET /no-such-page/ -> $missing (want 404)"
+          [ "$page" = "200" ] && [ "$missing" = "404" ]
 
   # Runs before the approval gate, with no environment, so the reviewer can read the prod plan first.
   # Its token's subject is ref:refs/heads/main, which the deploy role trusts for planning.
@@ -104,12 +121,13 @@ jobs:
     timeout-minutes: 30
     environment:
       name: prod # pauses here until a required reviewer approves in the Actions UI
-      url: ${{ steps.terraform.outputs.api_url }}
+      url: ${{ steps.terraform.outputs.site_url }}
     permissions:
       contents: read
       id-token: write
     outputs:
       api_url: ${{ steps.terraform.outputs.api_url }}
+      site_url: ${{ steps.terraform.outputs.site_url }}
     env:
       TF_VAR_alarm_email: ${{ secrets.ALARM_EMAIL }} # repository secret - stands in for the gitignored local.auto.tfvars
     steps:
@@ -124,6 +142,13 @@ jobs:
           environment: prod
           apply: "true"
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+      - uses: ./.github/actions/frontend
+        with:
+          api-url: ${{ steps.terraform.outputs.api_url }}
+          user-pool-id: ${{ steps.terraform.outputs.cognito_user_pool_id }}
+          client-id: ${{ steps.terraform.outputs.cognito_client_id }}
+          bucket: ${{ steps.terraform.outputs.site_bucket_name }}
+          distribution-id: ${{ steps.terraform.outputs.site_distribution_id }}
 
   smoke-test-prod:
     name: Smoke test prod
@@ -132,12 +157,14 @@ jobs:
     timeout-minutes: 5
     steps:
       # Prod has no test user and no password login, so check the public contract only
-      - name: Public route serves, protected route rejects anonymous calls
+      - name: Public route serves, protected route rejects anonymous calls, storefront serves
         env:
           API_URL: ${{ needs.deploy-prod.outputs.api_url }}
+          SITE_URL: ${{ needs.deploy-prod.outputs.site_url }}
         run: |
           code() { curl -s -o /dev/null -w '%{http_code}' --retry 3 --retry-all-errors "$@"; }
           products=$(code "$API_URL/products")
           cart=$(code "$API_URL/cart")
-          echo "GET /products -> $products (want 200), GET /cart without a token -> $cart (want 401)"
-          [ "$products" = "200" ] && [ "$cart" = "401" ]
+          page=$(code "$SITE_URL/products/")
+          echo "GET /products -> $products (want 200), GET /cart without a token -> $cart (want 401), storefront /products/ -> $page (want 200)"
+          [ "$products" = "200" ] && [ "$cart" = "401" ] && [ "$page" = "200" ]

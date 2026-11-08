@@ -19,6 +19,18 @@ outputs:
   cognito_client_id:
     description: App client ID - only set when apply is true
     value: ${{ steps.outputs.outputs.cognito_client_id }}
+  cognito_user_pool_id:
+    description: User pool ID - only set when apply is true
+    value: ${{ steps.outputs.outputs.cognito_user_pool_id }}
+  site_url:
+    description: Storefront URL - only set when apply is true
+    value: ${{ steps.outputs.outputs.site_url }}
+  site_bucket_name:
+    description: Storefront bucket - only set when apply is true
+    value: ${{ steps.outputs.outputs.site_bucket_name }}
+  site_distribution_id:
+    description: Storefront CloudFront distribution - only set when apply is true
+    value: ${{ steps.outputs.outputs.site_distribution_id }}
 
 runs:
   using: composite
@@ -86,4 +98,8 @@ runs:
       working-directory: infrastructure/environments/${{ inputs.environment }}
       run: |
         echo "api_url=$(terraform output -raw api_endpoint)" >> "$GITHUB_OUTPUT"
-        echo "cognito_client_id=$(terraform output -raw cognito_client_id)" >> "$GITHUB_OUTPUT"
+        {
+          for name in cognito_client_id cognito_user_pool_id site_url site_bucket_name site_distribution_id; do
+            echo "$name=$(terraform output -raw "$name")"
+          done
+        } >> "$GITHUB_OUTPUT"

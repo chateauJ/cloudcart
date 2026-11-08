@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
+    "preview": "node scripts/serve-static.mjs",
     "lint": "eslint",
     "env:dev": "sh scripts/write-env.sh dev",
     "env:prod": "sh scripts/write-env.sh prod",

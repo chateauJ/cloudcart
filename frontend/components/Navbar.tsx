@@ -16,9 +16,11 @@ export default function Navbar() {
     router.push("/login");
   }
 
+  // trailingSlash: true serves /products as /products/, so compare without it
+  const current = pathname.replace(/(.)\/$/, "$1");
   const linkClass = (href: string) =>
     `text-sm font-medium transition-colors hover:text-foreground ${
-      pathname === href ? "text-foreground" : "text-foreground/60"
+      current === href ? "text-foreground" : "text-foreground/60"
     }`;
 
   return (
