@@ -152,8 +152,10 @@ resource "aws_iam_role_policy" "github_actions_services" {
         # and it survives provider upgrades that add new read calls to refresh
         Sid    = "AppResourcesByName"
         Effect = "Allow"
-        Action = ["dynamodb:*", "sqs:*", "sns:*", "lambda:*", "events:*", "pipes:*", "logs:*", "cloudwatch:*"]
+        Action = ["dynamodb:*", "sqs:*", "sns:*", "lambda:*", "events:*", "pipes:*", "logs:*", "cloudwatch:*", "s3:*"]
         Resource = concat(flatten([for p in local.app_prefixes : [
+          "arn:aws:s3:::${p}-site-*",           # the storefront bucket (named <prefix>-site-<account id>)
+          "arn:aws:s3:::${p}-site-*/*",         # and its objects, for the deploy job's sync
           "${local.arn.dynamodb}:table/${p}-*", # also matches the table's /index/ and /stream/ ARNs
           "${local.arn.sqs}:${p}-*",
           "${local.arn.sns}:${p}-*", # topics; subscription reads only work on "*", see NoResourceLevelSupport
@@ -172,12 +174,13 @@ resource "aws_iam_role_policy" "github_actions_services" {
       {
         Sid    = "IdBasedServices" # these ARNs use generated IDs, not names, so scope to the account and region
         Effect = "Allow"
-        Action = ["apigateway:*", "cognito-idp:*"]
+        Action = ["apigateway:*", "cognito-idp:*", "cloudfront:*"]
         Resource = [
           "arn:aws:apigateway:${local.region}::/apis",
           "arn:aws:apigateway:${local.region}::/apis/*",
           "arn:aws:apigateway:${local.region}::/tags/*",
           "arn:aws:cognito-idp:${local.region}:${local.account_id}:userpool/*",
+          "arn:aws:cloudfront::${local.account_id}:*", # CloudFront is global: distributions, OAC and functions in this account
         ]
       },
       {
@@ -193,6 +196,9 @@ resource "aws_iam_role_policy" "github_actions_services" {
           "logs:CreateLogDelivery", "logs:GetLogDelivery", "logs:UpdateLogDelivery", "logs:DeleteLogDelivery",
           "logs:ListLogDeliveries", "logs:PutResourcePolicy", "logs:DescribeResourcePolicies",
           "sns:GetSubscriptionAttributes", "sns:SetSubscriptionAttributes", "sns:Unsubscribe",
+          # AWS-managed cache and response-headers policies are looked up by name and aren't in this account
+          "cloudfront:ListCachePolicies", "cloudfront:GetCachePolicy",
+          "cloudfront:ListResponseHeadersPolicies", "cloudfront:GetResponseHeadersPolicy",
         ]
         Resource = "*"
         Condition = {

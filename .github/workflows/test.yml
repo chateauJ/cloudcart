@@ -59,6 +59,13 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm run lint
+      # Catches anything a static export can't serve (a dynamic route, a server-only API) before merge.
+      # Placeholder values: the build only inlines them, and nothing here calls the API.
+      - run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: https://api.example.invalid
+          NEXT_PUBLIC_COGNITO_USER_POOL_ID: us-east-1_placeholder
+          NEXT_PUBLIC_COGNITO_CLIENT_ID: placeholder
 
   terraform-lint:
     name: Terraform - fmt, tflint

@@ -1,6 +1,18 @@
+"use client";
+
+import { Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import ConfirmSignUpForm from "@/components/auth/ConfirmSignUpForm";
 
-export default async function ConfirmPage(props: PageProps<"/confirm">) {
-  const { email } = await props.searchParams;
-  return <ConfirmSignUpForm initialEmail={typeof email === "string" ? email : ""} />;
+export default function ConfirmPage() {
+  return (
+    <Suspense>
+      <Confirm />
+    </Suspense>
+  );
+}
+
+function Confirm() {
+  // ?email= is set by the sign-up and login pages, so the user doesn't retype it
+  return <ConfirmSignUpForm initialEmail={useSearchParams().get("email") ?? ""} />;
 }

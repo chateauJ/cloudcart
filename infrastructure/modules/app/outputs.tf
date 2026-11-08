@@ -92,3 +92,18 @@ output "dashboard_url" {
   description = "Dev CloudWatch dashboard - open it in a browser"
   value       = module.monitoring.dashboard_url
 }
+
+output "site_url" {
+  description = "Public URL of the hosted storefront (CloudFront)"
+  value       = module.site.url
+}
+
+output "site_bucket_name" {
+  description = "Bucket the deploy job uploads the frontend build to"
+  value       = module.site.bucket_name
+}
+
+output "site_distribution_id" {
+  description = "CloudFront distribution the deploy job invalidates after an upload"
+  value       = module.site.distribution_id
+}

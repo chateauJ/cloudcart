@@ -163,10 +163,15 @@ module "auth" {
   deletion_protection       = var.cognito_deletion_protection
 }
 
+module "site" {
+  source      = "../static-site"
+  name_prefix = "${var.project_name}-${var.environment}"
+}
+
 module "api" {
   source             = "../api-gateway"
   api_name           = "${var.project_name}-${var.environment}-api"
-  cors_allow_origins = var.cors_allow_origins
+  cors_allow_origins = concat(var.cors_allow_origins, [module.site.url]) # the hosted storefront calls the API from its CloudFront origin
   integrations = {
     products = {
       function_name = module.products_lambda.function_name

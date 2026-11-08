@@ -1,0 +1,60 @@
+name: Frontend build and upload
+description: Build the static storefront against one environment's API and Cognito, upload it to that environment's site bucket, and refresh CloudFront. Expects AWS credentials already configured in the job.
+
+inputs:
+  api-url:
+    description: API endpoint the storefront calls
+    required: true
+  user-pool-id:
+    description: Cognito user pool ID
+    required: true
+  client-id:
+    description: Cognito app client ID
+    required: true
+  bucket:
+    description: Site bucket name
+    required: true
+  distribution-id:
+    description: CloudFront distribution ID
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: "24"
+        cache: npm
+        cache-dependency-path: frontend/package-lock.json
+
+    # NEXT_PUBLIC_* values are inlined at build time, so each environment gets its own build
+    - name: Build the static export
+      shell: bash
+      working-directory: frontend
+      env:
+        NEXT_PUBLIC_API_URL: ${{ inputs.api-url }}
+        NEXT_PUBLIC_COGNITO_USER_POOL_ID: ${{ inputs.user-pool-id }}
+        NEXT_PUBLIC_COGNITO_CLIENT_ID: ${{ inputs.client-id }}
+      run: |
+        npm ci
+        npm run build
+
+    # Hashed assets first, so no uploaded page ever references a file that isn't there yet.
+    # Their names change with their content, so browsers and CloudFront may cache them forever.
+    # Old ones are kept: a page already open in a browser may still lazy-load them.
+    - name: Upload to S3
+      shell: bash
+      working-directory: frontend
+      env:
+        BUCKET: ${{ inputs.bucket }}
+      run: |
+        aws s3 sync out/_next/static "s3://$BUCKET/_next/static" --cache-control "public, max-age=31536000, immutable"
+        aws s3 sync out "s3://$BUCKET" --exclude "_next/static/*" --cache-control "no-cache" --delete
+
+    - name: Invalidate CloudFront
+      shell: bash
+      env:
+        DISTRIBUTION_ID: ${{ inputs.distribution-id }}
+      run: |
+        id=$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/*" --query Invalidation.Id --output text)
+        aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION_ID" --id "$id"

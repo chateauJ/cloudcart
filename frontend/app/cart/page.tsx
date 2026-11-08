@@ -93,7 +93,10 @@ export default function CartPage() {
               initialClassName="text-xl"
             />
             <div className="flex-1">
-              <Link href={`/products/${item.productId}`} className="font-medium hover:underline">
+              <Link
+                href={`/product?id=${encodeURIComponent(item.productId)}`}
+                className="font-medium hover:underline"
+              >
                 {product?.name ?? item.productId}
               </Link>
               <p className="text-sm text-foreground/50">
