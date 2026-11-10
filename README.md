@@ -23,13 +23,15 @@ A serverless, event-driven e-commerce backend on AWS. Every resource is defined 
 | Frontend wired to the real API and Cognito, with a seeded 12-product catalog | Done |
 | Static storefront on S3 + CloudFront, deployed by the pipeline | Done |
 | Multi-tenancy: every table partitioned by tenant, two seeded stores | Done |
+| API served through CloudFront at `/api`, catalog cached per store at the edge; AWS Budgets alert | Done |
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    cdn[CloudFront + private S3] -->|static storefront| client[Browser]
-    client -->|HTTPS + Cognito JWT| api[API Gateway HTTP API]
+    client[Browser] -->|HTTPS + Cognito JWT| cdn[CloudFront]
+    cdn -->|pages| s3[(private S3)]
+    cdn -->|"/api/* (catalog cached per store)"| api[API Gateway HTTP API]
     cognito[Cognito User Pool] -. issues / validates JWTs .- api
     api --> products[products λ] --> pt[(products)]
     api --> cart[cart λ] --> ct[(carts)]
@@ -43,7 +45,7 @@ flowchart LR
     bus --> sns[SNS order notifications] --> notifications[notifications λ]
 ```
 
-**Request path.** API Gateway's built-in JWT authorizer validates Cognito tokens, so there is no custom authorizer Lambda. Handlers take the user ID from the token's `sub` claim and never from the request body.
+**Request path.** One CloudFront distribution serves both the storefront and its API: pages come from S3, and `/api/*` goes to the HTTP API with the `/api` prefix stripped by a CloudFront Function. The site and API share an origin, so the hosted storefront needs no CORS. API Gateway's built-in JWT authorizer validates Cognito tokens, so there is no custom authorizer Lambda. Handlers take the user ID from the token's `sub` claim and never from the request body.
 
 **Order path.** The orders Lambda writes the order and nothing else. A DynamoDB Stream on the orders table feeds an EventBridge Pipe, which publishes `OrderCreated` to a custom bus. Two rules fan that event out: one to SQS for the inventory Lambda, one to SNS for the notifications Lambda.
 
@@ -99,6 +101,7 @@ The API answers checkout before inventory is reserved, so a slow or failing inve
 - **Transactional checkout.** `POST /orders` uses `TransactWriteItems` to create the order and clear the cart together. A condition on the cart's `updatedAt` rejects a checkout against a cart that changed mid-request. Cart writes use the same optimistic-concurrency check.
 - **Partial batch failures.** The inventory Lambda reports failed message IDs individually, so one bad message is retried without re-running the rest of the batch.
 - **Pool multi-tenancy.** One deployment serves many businesses. Every table's partition key is `tenantId`, every request names its store with `X-Tenant-Id` (checked against a `tenants` table), and every DynamoDB key is built by one helper that takes the tenant first, so no handler can address another store's data by ID alone. A shopper's single Cognito account works at every store, with a separate cart and order history at each. Listing a catalog is a `Query` on the tenant's partition rather than a `Scan` of the table.
+- **Catalog caching at the edge, not in a cache cluster.** `GET /tenant`, `/products` and `/products/{id}` are cached at CloudFront for 30 seconds, with `X-Tenant-Id` in the cache key so each store is cached separately; a test proves one store's cached catalog is never served to another. Catalog reads are public, read-heavy and fine to be seconds stale, so this replaces DAX or ElastiCache at no cost. Every other route is never cached and is keyed on `Authorization`, because CloudFront strips that header from GET requests unless it's in the cache key. Stock is still enforced at checkout by the conditional write, so a stale catalog can't oversell.
 - **Separate directories per environment, not workspaces.** Each environment is its own root module and state file, so applying to the wrong one takes an explicit `cd`. Both call the same `modules/app`, and they differ only in a handful of arguments.
 
 ## Tech stack
@@ -106,9 +109,9 @@ The API answers checkout before inventory is reserved, so a slow or failing inve
 | Layer | Choice |
 | --- | --- |
 | Compute | AWS Lambda, Node.js 24, ARM64 (Graviton), bundled with esbuild |
-| API | API Gateway HTTP API (v2), native JWT authorizer |
+| API | API Gateway HTTP API (v2), native JWT authorizer, behind CloudFront |
 | Auth | Amazon Cognito User Pool + public app client |
-| Data | DynamoDB on-demand: `products`, `carts`, `orders` + `userId-createdAt-index` GSI |
+| Data | DynamoDB on-demand: `tenants`, `products`, `carts`, `orders` + `tenantUser-createdAt-index` GSI |
 | Events | DynamoDB Streams, EventBridge Pipes, EventBridge custom bus, SQS + DLQ, SNS |
 | Observability | CloudWatch Logs (structured JSON), alarms, dashboard, Logs Insights queries, X-Ray |
 | IaC | Terraform 1.14, AWS provider 6.x, S3 remote state with DynamoDB locking, tflint |
@@ -118,7 +121,7 @@ The API answers checkout before inventory is reserved, so a slow or failing inve
 
 ## API
 
-Every request names its store with an `X-Tenant-Id` header (for example `northlight`). A missing or malformed header returns 400 and an unknown store 404, before any store data is read.
+The hosted storefront calls the API at `<site_url>/api` (for example `/api/products`); the HTTP API's own endpoint serves the same routes at the root and is what local development uses. Every request names its store with an `X-Tenant-Id` header (for example `northlight`). A missing or malformed header returns 400 and an unknown store 404, before any store data is read.
 
 | Method | Route | Auth | Lambda |
 | --- | --- | --- | --- |
@@ -148,7 +151,7 @@ backend/
   shared/                       # auth, DynamoDB client, logger, request parsing, responses
   integration/                  # golden-path suite against a deployed environment
 infrastructure/
-  bootstrap/                    # one-time: state bucket, lock table, GitHub OIDC provider, deploy role, boundary
+  bootstrap/                    # one-time: state bucket, lock table, GitHub OIDC provider, deploy role, boundary, budget
   modules/
     app/                        # wires every module below into one environment
     api-gateway/ cognito/ dynamodb/ lambda/ order-events/ sqs/ sns/ monitoring/ static-site/
@@ -175,11 +178,12 @@ Terraform can't create the backend it stores its own state in, so this root modu
 
 ```bash
 cd infrastructure/bootstrap
+echo 'alarm_email = "you@example.com"' > local.auto.tfvars   # where budget alerts go; gitignored
 terraform init
 terraform apply
 ```
 
-It creates the state bucket and lock table, the GitHub OIDC provider, the `cloudcart-github-actions` deploy role, and the permissions boundary every app role must carry. Then:
+It creates the state bucket and lock table, the GitHub OIDC provider, the `cloudcart-github-actions` deploy role, the permissions boundary every app role must carry, and a $10 monthly AWS Budgets alert. Then:
 
 - Put `state_bucket_name` and `lock_table_name` into each `environments/*/backend.tf`.
 - Set `github_actions_role_arn` as the `AWS_ROLE_ARN` repository variable in GitHub.
@@ -208,12 +212,13 @@ npm test
 npm run test:coverage
 ```
 
-The integration suite runs the full golden path against a deployed environment: sign in, list products, add to cart, check out, poll until the order completes, then check that stock went down. It also checks tenant isolation between the two seeded stores (`northlight` and `tidewater`): each has its own catalog where product IDs overlap, its own cart for the same shopper, and can't see the other's orders. It needs a confirmed Cognito test user.
+The integration suite runs the full golden path against a deployed environment: sign in, list products, add to cart, check out, poll until the order completes, then check that stock went down. It also checks tenant isolation between the two seeded stores (`northlight` and `tidewater`): each has its own catalog where product IDs overlap, its own cart for the same shopper, and can't see the other's orders. With `CLOUDCART_SITE_URL` set (the `site_url` output), it also checks the CloudFront `/api` path: a repeat catalog request is a cache hit, each store is cached separately, signed-in requests carry their token and are never cached, and API errors arrive as JSON. It needs a confirmed Cognito test user.
 
 ```bash
 cd backend
 export CLOUDCART_API_URL=$(terraform -chdir=../infrastructure/environments/dev output -raw api_endpoint)
 export CLOUDCART_COGNITO_CLIENT_ID=$(terraform -chdir=../infrastructure/environments/dev output -raw cognito_client_id)
+export CLOUDCART_SITE_URL=$(terraform -chdir=../infrastructure/environments/dev output -raw site_url)
 export CLOUDCART_TEST_USERNAME=you@example.com
 export CLOUDCART_TEST_PASSWORD='your-test-password'
 npm run test:integration
@@ -228,7 +233,7 @@ npm run env:dev   # writes .env.local from the dev Terraform outputs
 npm run dev
 ```
 
-Open http://localhost:3000 (the API's CORS setting allows only this origin and the hosted storefront's CloudFront URL). Sign up with a real email address: Cognito emails a confirmation code, and sign-in then uses SRP, so the password never leaves the browser. See [`frontend/README.md`](frontend/README.md) for how the client maps to the API and how to re-record the demo.
+Open http://localhost:3000 (the API's CORS setting allows only this origin; the hosted storefront needs no CORS because it calls `/api` on its own origin). Sign up with a real email address: Cognito emails a confirmation code, and sign-in then uses SRP, so the password never leaves the browser. See [`frontend/README.md`](frontend/README.md) for how the client maps to the API and how to re-record the demo.
 
 ## CI/CD
 
@@ -249,11 +254,11 @@ flowchart LR
 **`deploy.yml`** runs on push to `main`:
 
 1. Reruns `test.yml`, so `main` can't deploy anything a PR wouldn't pass.
-2. **Deploy dev:** builds the bundles, assumes the deploy role through OIDC, then plans and applies the saved plan. It then builds the storefront against dev's API and Cognito, uploads it to S3 and invalidates CloudFront.
-3. **Smoke test dev:** runs the integration suite against the API that was just deployed, then checks that the storefront serves a page (200) and a missing page (404) through CloudFront.
+2. **Deploy dev:** builds the bundles, assumes the deploy role through OIDC, then plans and applies the saved plan. It then builds the storefront against `/api` and dev's Cognito, uploads it to S3 and invalidates CloudFront.
+3. **Smoke test dev:** runs the integration suite against the API that was just deployed, both directly and through CloudFront's `/api` path, then checks that the storefront serves a page (200) and a missing page (404).
 4. **Plan prod:** plans without applying, so the reviewer can read it first.
 5. **Deploy prod:** waits for a required reviewer on the `prod` GitHub Environment, then re-plans, applies, and deploys the storefront the same way.
-6. **Smoke test prod:** `GET /products` must return 200, an anonymous `GET /cart` must return 401, and the storefront's `/products/` page must return 200.
+6. **Smoke test prod:** through the storefront's URL, `GET /api/products` must return 200, an anonymous `GET /api/cart` must return 401, and the `/products/` page must return 200.
 
 Deploys queue rather than cancel, because interrupting `terraform apply` can leave state locked.
 
@@ -265,7 +270,8 @@ Deploys queue rather than cancel, because interrupting `terraform apply` can lea
 - **No privilege escalation from CI.** The deploy role can create IAM roles only if they carry the `cloudcart-workload-boundary` permissions boundary. It also can't detach or edit that boundary.
 - **Least-privilege Lambda roles.** Each function gets only the DynamoDB actions it uses, on its own tables, and log permissions on its own log group. For example, the orders role has no EventBridge access, and the cart role can only read `products`.
 - **Identity from the token.** Cart and order operations take the user ID from the verified JWT, never from the request.
-- **Private storefront bucket.** The site bucket blocks all public access. CloudFront reads it through Origin Access Control, and the bucket policy admits only that one distribution. CloudFront adds standard security headers (HSTS, `nosniff`, frame and referrer policies) and AWS Shield Standard DDoS protection.
+- **Private storefront bucket.** The site bucket blocks all public access. CloudFront reads it through Origin Access Control, and the bucket policy admits only that one distribution. CloudFront adds standard security headers (HSTS, `nosniff`, frame and referrer policies) to pages and API responses, and AWS Shield Standard DDoS protection to both.
+- **Cost alarm.** An account-wide AWS Budgets alert (in `bootstrap/`) emails at 80% of a $10 monthly limit and when the month is forecast to pass it. With no WAF, it's the backstop against a flood of valid requests that throttling alone wouldn't make free.
 - **Pinned Actions.** Third-party Actions are pinned to commit SHAs, and checkout doesn't persist credentials.
 
 ## Monitoring
@@ -295,8 +301,9 @@ Nothing in the design bills while it sits idle:
 - HTTP API instead of REST API: about 70% cheaper per request, with a free native JWT authorizer.
 - No VPC, so no NAT gateway. Every service is reached through its public AWS endpoint.
 - A static storefront on S3 + CloudFront instead of a server: CloudFront's always-free tier covers 1 TB and 10 million requests a month.
-- No provisioned concurrency, caching layer or custom domain.
+- Catalog caching at CloudFront instead of DAX or ElastiCache, which bill per node-hour even when idle. Cached catalog requests never reach API Gateway or Lambda.
+- No provisioned concurrency or custom domain.
 
 ## Out of scope
 
-The design deliberately leaves out payments, multi-region deployment and DR, WAF and custom throttling, a caching layer, and hosting the frontend on AWS.
+The design deliberately leaves out payments, multi-region deployment and DR, WAF and custom throttling, and a custom domain (which would also let the API's default endpoint be closed, so all traffic passes through CloudFront).

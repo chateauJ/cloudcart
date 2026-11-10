@@ -35,8 +35,10 @@ Each build is one store's storefront: `NEXT_PUBLIC_TENANT_ID` (written by `env:d
 `storefront_tenant_id` output) is sent as `X-Tenant-Id` on every API call. To run the other seeded
 store locally, use `TENANT_ID=tidewater npm run env:dev`.
 
-The API only accepts browser requests from `http://localhost:3000` (its CORS setting), so keep the
-default port.
+Locally, the app calls the HTTP API's own endpoint, which only accepts browser requests from
+`http://localhost:3000` (its CORS setting), so keep the default port. The hosted builds are made
+with `NEXT_PUBLIC_API_URL=/api`: CloudFront serves the API under the storefront's own origin, so they
+need no CORS, and catalog responses come from the edge cache.
 
 ## Recording the demo
 
