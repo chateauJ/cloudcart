@@ -19,6 +19,15 @@ variable "lambda_dist_dir" {
   type = string
 }
 
+variable "reservation_hold_minutes" {
+  description = "How long a pickup order's stock is held before it goes back on sale"
+  type        = number
+  validation {
+    condition     = var.reservation_hold_minutes >= 2
+    error_message = "reservation_hold_minutes must be at least 2: the expiry schedule is created at least a minute ahead."
+  }
+}
+
 variable "cors_allow_origins" {
   type = list(string)
 }

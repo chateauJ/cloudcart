@@ -37,7 +37,7 @@ function OrderDetail() {
   }, [isLoading, user, router]);
 
   // The order is created PENDING; the Streams -> Pipe -> SQS -> Inventory Lambda path moves it to
-  // COMPLETE or FAILED a few seconds later, so poll until it settles
+  // RESERVED or FAILED a few seconds later, so poll until it settles
   useEffect(() => {
     if (!user) return;
 
@@ -79,6 +79,15 @@ function OrderDetail() {
     );
   }
 
+  const pickupStore =
+    order.fulfillment?.type === "PICKUP"
+      ? (locationById(order.fulfillment.locationId) ?? {
+          locationId: order.fulfillment.locationId,
+          name: order.fulfillment.locationId,
+        })
+      : undefined;
+  const holdDeadline = order.holdExpiresAt ? new Date(order.holdExpiresAt).toLocaleString() : "the hold deadline";
+
   return (
     <div className="mx-auto max-w-lg">
       <Link href="/orders" className="text-sm text-foreground/60 hover:underline">
@@ -93,9 +102,41 @@ function OrderDetail() {
         Placed {new Date(order.createdAt).toLocaleString()}
       </p>
 
+      <p className="mt-3 text-sm">
+        {pickupStore ? (
+          <>
+            Pick up at <span className="font-medium">{pickupStore.name}</span>
+          </>
+        ) : (
+          "Shipping to you"
+        )}
+      </p>
+
       {order.status === "PENDING" && (
         <p className="mt-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
           Processing your order - stock is being reserved asynchronously.
+        </p>
+      )}
+      {order.status === "RESERVED" && pickupStore && (
+        <p className="mt-4 rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-800">
+          Held for you until {holdDeadline}.
+          {order.items.some((line) => line.needsTransfer) &&
+            ` Some items are coming from another location and will be moved to ${pickupStore.name} first.`}
+        </p>
+      )}
+      {order.status === "RESERVED" && !pickupStore && (
+        <p className="mt-4 rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-800">
+          Your items are set aside and will ship soon.
+        </p>
+      )}
+      {order.status === "READY_FOR_PICKUP" && (
+        <p className="mt-4 rounded-md bg-green-50 px-3 py-2 text-sm text-green-800">
+          Ready at the {pickupStore?.name ?? "store"} counter until {holdDeadline}.
+        </p>
+      )}
+      {order.status === "EXPIRED" && (
+        <p className="mt-4 rounded-md bg-foreground/5 px-3 py-2 text-sm text-foreground/70">
+          The hold ended {holdDeadline} and the items went back on sale.
         </p>
       )}
       {order.status === "FAILED" && (
@@ -112,6 +153,7 @@ function OrderDetail() {
               {line.sourceLocationId && (
                 <span className="block text-xs text-foreground/50">
                   From {locationById(line.sourceLocationId)?.name ?? line.sourceLocationId}
+                  {line.needsTransfer && pickupStore && ` · transfer to ${pickupStore.name}`}
                 </span>
               )}
             </span>

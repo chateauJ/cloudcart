@@ -1,4 +1,5 @@
 data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
 
 # Pool tenancy: one deployment serves many businesses, and every table is partitioned by tenantId,
 # so a tenant's data can only be reached with a key that names that tenant
@@ -134,11 +135,16 @@ module "orders_lambda" {
     CARTS_TABLE_NAME       = module.carts_table.table_name
     PRODUCTS_TABLE_NAME    = module.products_table.table_name
     TENANTS_TABLE_NAME     = module.tenants_table.table_name
+    LOCATIONS_TABLE_NAME   = module.locations_table.table_name # to check a pickup store exists and takes pickups
   }
   dynamodb_access = [
     {
       actions       = ["dynamodb:PutItem", "dynamodb:GetItem"]
       resource_arns = [module.orders_table.table_arn]
+    },
+    {
+      actions       = ["dynamodb:GetItem"]
+      resource_arns = [module.locations_table.table_arn]
     },
     {
       actions       = ["dynamodb:Query"]
@@ -193,9 +199,13 @@ module "inventory_lambda" {
   dist_dir                 = "${var.lambda_dist_dir}/inventory"
   permissions_boundary_arn = local.permissions_boundary_arn
   environment_variables = {
-    ORDERS_TABLE_NAME    = module.orders_table.table_name
-    STOCK_TABLE_NAME     = module.stock_table.table_name
-    LOCATIONS_TABLE_NAME = module.locations_table.table_name
+    ORDERS_TABLE_NAME       = module.orders_table.table_name
+    STOCK_TABLE_NAME        = module.stock_table.table_name
+    LOCATIONS_TABLE_NAME    = module.locations_table.table_name
+    HOLD_MINUTES            = tostring(var.reservation_hold_minutes)
+    HOLD_SCHEDULE_GROUP     = aws_scheduler_schedule_group.holds.name
+    HOLD_EXPIRY_TARGET_ARN  = module.expiry_lambda.function_arn
+    HOLD_SCHEDULER_ROLE_ARN = aws_iam_role.hold_scheduler.arn
   }
   dynamodb_access = [
     {
@@ -211,7 +221,79 @@ module "inventory_lambda" {
       resource_arns = [module.locations_table.table_arn]
     }
   ]
+  extra_policy_statements = [
+    {
+      Sid      = "ScheduleHoldExpiry"
+      Effect   = "Allow"
+      Action   = ["scheduler:CreateSchedule"]
+      Resource = ["arn:aws:scheduler:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:schedule/${aws_scheduler_schedule_group.holds.name}/*"]
+    },
+    {
+      Sid       = "HandSchedulesTheirRole" # a schedule runs as the role it's given, so creating one means passing it
+      Effect    = "Allow"
+      Action    = ["iam:PassRole"]
+      Resource  = [aws_iam_role.hold_scheduler.arn]
+      Condition = { StringEquals = { "iam:PassedToService" = "scheduler.amazonaws.com" } }
+    },
+  ]
   sqs_event_source = { queue_arn = module.order_queue.queue_arn }
+}
+
+# Pickup holds: the inventory Lambda creates one one-time schedule per pickup order in this group,
+# firing at the hold deadline. Each runs the expiry Lambda once, then deletes itself.
+resource "aws_scheduler_schedule_group" "holds" {
+  name = "${var.project_name}-${var.environment}-holds"
+}
+
+module "expiry_lambda" {
+  source                   = "../lambda"
+  function_name            = "${var.project_name}-${var.environment}-expiry"
+  dist_dir                 = "${var.lambda_dist_dir}/expiry"
+  permissions_boundary_arn = local.permissions_boundary_arn
+  environment_variables = {
+    ORDERS_TABLE_NAME = module.orders_table.table_name
+    STOCK_TABLE_NAME  = module.stock_table.table_name
+  }
+  dynamodb_access = [
+    {
+      actions       = ["dynamodb:GetItem", "dynamodb:UpdateItem"]
+      resource_arns = [module.orders_table.table_arn]
+    },
+    {
+      actions       = ["dynamodb:UpdateItem"] # returns held stock
+      resource_arns = [module.stock_table.table_arn]
+    }
+  ]
+}
+
+# The role every hold schedule runs as: it can invoke the expiry Lambda and nothing else
+resource "aws_iam_role" "hold_scheduler" {
+  name                 = "${var.project_name}-${var.environment}-hold-scheduler-role"
+  permissions_boundary = local.permissions_boundary_arn
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "scheduler.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+      Condition = { StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id } }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "hold_scheduler" {
+  name = "invoke-expiry"
+  role = aws_iam_role.hold_scheduler.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["lambda:InvokeFunction"]
+      Resource = [module.expiry_lambda.function_arn]
+    }]
+  })
 }
 
 module "auth" {
@@ -273,6 +355,7 @@ module "monitoring" {
     cart          = module.cart_lambda.function_name
     orders        = module.orders_lambda.function_name
     inventory     = module.inventory_lambda.function_name
+    expiry        = module.expiry_lambda.function_name
     notifications = module.notifications_lambda.function_name
   }
   api_id           = module.api.api_id

@@ -6,6 +6,7 @@ export const keys = {
   product: (tenantId: string, productId: string) => ({ tenantId, productId }),
   cart: (tenantId: string, userId: string) => ({ tenantId, userId }),
   order: (tenantId: string, orderId: string) => ({ tenantId, orderId }),
+  location: (tenantId: string, locationId: string) => ({ tenantId, locationId }),
   stock: (tenantId: string, productId: string, locationId: string) => ({
     tenantId,
     stockKey: `${productId}#${locationId}`,
@@ -14,4 +15,6 @@ export const keys = {
   stockPrefix: (productId: string) => `${productId}#`,
   // The orders table's user-index partition key: one shopper's history at one store
   tenantUser: (tenantId: string, userId: string) => `${tenantId}#${userId}`,
+  // A pickup order's store, for the pickup-queue index: one store's orders at one tenant
+  tenantLocation: (tenantId: string, locationId: string) => `${tenantId}#${locationId}`,
 };

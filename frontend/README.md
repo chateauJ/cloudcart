@@ -78,4 +78,6 @@ Before recording, it empties that user's cart off camera, so every take starts t
 | `lib/stock.ts` | Totals, per-location quantities and the per-line maximum from a product's stock |
 
 New orders start as `PENDING`. The order page polls until the asynchronous inventory flow (DynamoDB
-Streams → EventBridge Pipe → SQS → Inventory Lambda) marks the order `COMPLETE` (showing where each line was taken from) or `FAILED`.
+Streams → EventBridge Pipe → SQS → Inventory Lambda) marks the order `RESERVED` (showing where each line was taken from) or `FAILED`. Checkout
+offers pickup at a store (defaulting to My store) or shipping; a pickup order shows its store, its hold
+deadline and which lines are being transferred in, and later `READY FOR PICKUP`, `FULFILLED` or `EXPIRED`.
