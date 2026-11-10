@@ -58,7 +58,7 @@ describe("CloudCart dev API", () => {
     }
   });
 
-  it("takes an order from cart to COMPLETE and takes the stock from the warehouse first", async () => {
+  it("takes a shipping order from cart to RESERVED and takes the stock from the warehouse first", async () => {
     // Start from an empty cart so leftovers from earlier manual testing don't end up in the order
     const existing = await api(config, "GET", "/cart", { token });
     for (const item of existing.body.items) {
@@ -81,9 +81,14 @@ describe("CloudCart dev API", () => {
     expect(added.status).toBe(200);
     expect(added.body.items).toEqual([{ productId: product.productId, quantity: 1 }]);
 
-    const created = await api(config, "POST", "/orders", { token });
+    const created = await api(config, "POST", "/orders", { token, body: { fulfillment: { type: "SHIP" } } });
     expect(created.status).toBe(201);
-    expect(created.body).toMatchObject({ tenantId: config.tenantId, status: "PENDING", total: product.price });
+    expect(created.body).toMatchObject({
+      tenantId: config.tenantId,
+      status: "PENDING",
+      fulfillment: { type: "SHIP" },
+      total: product.price,
+    });
     const orderId: string = created.body.orderId;
 
     // Checkout clears the cart in the same transaction that writes the order
@@ -95,7 +100,8 @@ describe("CloudCart dev API", () => {
       () => api(config, "GET", `/orders/${orderId}`, { token }),
       (res) => res.status === 200 && res.body.status !== "PENDING",
     );
-    expect(settled.body).toMatchObject({ orderId, status: "COMPLETE" });
+    expect(settled.body).toMatchObject({ orderId, status: "RESERVED" });
+    expect(settled.body).not.toHaveProperty("holdExpiresAt"); // only pickups are held against a deadline
 
     // Shipping prefers the warehouse; the order records where the unit came from
     const source: string = settled.body.items[0].sourceLocationId;
@@ -109,6 +115,61 @@ describe("CloudCart dev API", () => {
     // The same order doesn't exist from another store's point of view
     const elsewhere = await api(config, "GET", `/orders/${orderId}`, { token, tenant: config.otherTenantId });
     expect(elsewhere.status).toBe(404);
+  });
+
+  it("holds a pickup at a store, transferring stock the store doesn't have", async () => {
+    // Find a store missing a product that another location holds - that line needs a transfer.
+    // Holds expire in dev after a few minutes, so the stock this takes comes back on its own.
+    const locations = await api(config, "GET", "/locations");
+    const catalog = await api(config, "GET", "/products");
+    const stores = locations.body.filter((l: { pickupEnabled: boolean }) => l.pickupEnabled);
+    let pick: { storeId: string; product: { productId: string; stock: StockLevel[] } } | undefined;
+    for (const store of stores) {
+      const product = catalog.body.find(
+        (p: { stock: StockLevel[] }) => stockAt(p, store.locationId) === 0 && p.stock.some((l) => l.quantity >= 1),
+      );
+      if (product) {
+        pick = { storeId: store.locationId, product };
+        break;
+      }
+    }
+    if (!pick) throw new Error("No store is missing a product held elsewhere - check the seeded stock");
+
+    const cart = await api(config, "GET", "/cart", { token });
+    for (const item of cart.body.items) await api(config, "DELETE", `/cart/items/${item.productId}`, { token });
+    await api(config, "POST", "/cart/items", { token, body: { productId: pick.product.productId, quantity: 1 } });
+
+    const created = await api(config, "POST", "/orders", {
+      token,
+      body: { fulfillment: { type: "PICKUP", locationId: pick.storeId } },
+    });
+    expect(created.status).toBe(201);
+    expect(created.body).not.toHaveProperty("tenantLocation"); // an index key, never returned
+
+    const settled = await poll(
+      () => api(config, "GET", `/orders/${created.body.orderId}`, { token }),
+      (res) => res.status === 200 && res.body.status !== "PENDING",
+    );
+    expect(settled.body).toMatchObject({
+      status: "RESERVED",
+      fulfillment: { type: "PICKUP", locationId: pick.storeId },
+      items: [{ productId: pick.product.productId, needsTransfer: true }],
+    });
+    expect(settled.body.items[0].sourceLocationId).not.toBe(pick.storeId);
+    expect(Date.parse(settled.body.holdExpiresAt)).toBeGreaterThan(Date.parse(settled.body.createdAt));
+  });
+
+  it("refuses a pickup at the warehouse, which doesn't serve customers", async () => {
+    const locations = await api(config, "GET", "/locations");
+    const warehouse = locations.body.find((l: { type: string }) => l.type === "WAREHOUSE");
+
+    const res = await api(config, "POST", "/orders", {
+      token,
+      body: { fulfillment: { type: "PICKUP", locationId: warehouse.locationId } },
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("INVALID_PICKUP_LOCATION");
   });
 
   it("returns 404 for an order that doesn't exist", async () => {

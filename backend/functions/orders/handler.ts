@@ -12,14 +12,16 @@ import { errorResponse, jsonResponse } from "../../shared/responses";
 import { getUserId } from "../../shared/auth";
 import { keys } from "../../shared/keys";
 import { createLogger, Logger } from "../../shared/logger";
+import { parseJsonBody } from "../../shared/request";
 import { resolveTenant } from "../../shared/tenant";
-import { Cart, Order, OrderLineItem, Product } from "../../shared/types";
+import { Cart, Fulfillment, Location, Order, OrderLineItem, Product } from "../../shared/types";
 
 const ORDERS_TABLE_NAME = process.env.ORDERS_TABLE_NAME;
 const ORDERS_USER_INDEX_NAME = process.env.ORDERS_USER_INDEX_NAME;
 const CARTS_TABLE_NAME = process.env.CARTS_TABLE_NAME;
 const PRODUCTS_TABLE_NAME = process.env.PRODUCTS_TABLE_NAME;
 const TENANTS_TABLE_NAME = process.env.TENANTS_TABLE_NAME;
+const LOCATIONS_TABLE_NAME = process.env.LOCATIONS_TABLE_NAME;
 
 // Inventory reserves every line plus the order status update in one transaction,
 // and DynamoDB transactions cap at 100 items - so 99 lines, not BatchGetItem's 100.
@@ -37,7 +39,8 @@ export async function handler(
     !ORDERS_USER_INDEX_NAME ||
     !CARTS_TABLE_NAME ||
     !PRODUCTS_TABLE_NAME ||
-    !TENANTS_TABLE_NAME
+    !TENANTS_TABLE_NAME ||
+    !LOCATIONS_TABLE_NAME
   ) {
     log.error("One or more required table/index environment variables are not set");
     return errorResponse(500, "CONFIGURATION_ERROR", "Server is misconfigured");
@@ -58,7 +61,7 @@ export async function handler(
 
     switch (event.routeKey) {
       case "POST /orders":
-        return await createOrder(tenantId, userId, log);
+        return await createOrder(event, tenantId, userId, log);
       case "GET /orders":
         return await listOrders(tenantId, userId);
       case "GET /orders/{id}": {
@@ -83,7 +86,36 @@ export async function handler(
   }
 }
 
-async function createOrder(tenantId: string, userId: string, log: Logger): Promise<APIGatewayProxyResultV2> {
+async function createOrder(
+  event: APIGatewayProxyEventV2,
+  tenantId: string,
+  userId: string,
+  log: Logger,
+): Promise<APIGatewayProxyResultV2> {
+  let body: unknown;
+  try {
+    body = parseJsonBody(event);
+  } catch {
+    return errorResponse(400, "INVALID_JSON", "Request body is not valid JSON");
+  }
+  const fulfillment = parseFulfillment(body);
+  if (!fulfillment) {
+    return errorResponse(
+      400,
+      "INVALID_REQUEST",
+      'Body must be { fulfillment: { type: "SHIP" } } or { fulfillment: { type: "PICKUP", locationId } }',
+    );
+  }
+  if (fulfillment.type === "PICKUP") {
+    const location = await docClient.send(
+      new GetCommand({ TableName: LOCATIONS_TABLE_NAME, Key: keys.location(tenantId, fulfillment.locationId) }),
+    );
+    // The warehouse is a location too, but it doesn't serve customers
+    if (!(location.Item as Location | undefined)?.pickupEnabled) {
+      return errorResponse(400, "INVALID_PICKUP_LOCATION", `${fulfillment.locationId} is not a store you can pick up from`);
+    }
+  }
+
   const cartResult = await docClient.send(
     new GetCommand({ TableName: CARTS_TABLE_NAME, Key: keys.cart(tenantId, userId) }),
   );
@@ -118,7 +150,9 @@ async function createOrder(tenantId: string, userId: string, log: Logger): Promi
     orderId: `order_${randomUUID()}`,
     userId,
     tenantUser: keys.tenantUser(tenantId, userId),
-    status: "PENDING", // inventory is reserved asynchronously (Milestone 4), not here
+    status: "PENDING", // stock is allocated and reserved asynchronously by the inventory Lambda, not here
+    fulfillment,
+    ...(fulfillment.type === "PICKUP" && { tenantLocation: keys.tenantLocation(tenantId, fulfillment.locationId) }),
     total: calculateTotal(items),
     items,
     createdAt: now,
@@ -149,7 +183,12 @@ async function createOrder(tenantId: string, userId: string, log: Logger): Promi
     }),
   );
 
-  log.info("order created", { orderId: order.orderId, total: order.total, lineCount: items.length });
+  log.info("order created", {
+    orderId: order.orderId,
+    total: order.total,
+    lineCount: items.length,
+    fulfillment: fulfillment.type,
+  });
   return jsonResponse(201, publicOrder(order));
 }
 
@@ -181,8 +220,26 @@ async function getOrder(tenantId: string, userId: string, orderId: string): Prom
   return jsonResponse(200, publicOrder(order));
 }
 
-// tenantUser only exists to key the user index - it isn't part of the API's order shape
-function publicOrder({ tenantUser: _indexKey, ...order }: Order): Omit<Order, "tenantUser"> {
+// Only the two shapes the API accepts, with nothing extra carried through into the order
+function parseFulfillment(body: unknown): Fulfillment | null {
+  if (typeof body !== "object" || body === null) return null;
+  const fulfillment = (body as { fulfillment?: unknown }).fulfillment;
+  if (typeof fulfillment !== "object" || fulfillment === null) return null;
+
+  const { type, locationId } = fulfillment as Record<string, unknown>;
+  if (type === "SHIP") return { type: "SHIP" };
+  if (type === "PICKUP" && typeof locationId === "string" && /^[a-z0-9_-]{1,64}$/.test(locationId)) {
+    return { type: "PICKUP", locationId };
+  }
+  return null;
+}
+
+// tenantUser and tenantLocation only exist to key indexes - they aren't part of the API's order shape
+function publicOrder({
+  tenantUser: _userIndexKey,
+  tenantLocation: _locationIndexKey,
+  ...order
+}: Order): Omit<Order, "tenantUser" | "tenantLocation"> {
   return order;
 }
 

@@ -4,6 +4,7 @@ import {
   ConditionalCheckFailedException,
   TransactionCanceledException,
 } from "@aws-sdk/client-dynamodb";
+import { ConflictException, CreateScheduleCommand, SchedulerClient } from "@aws-sdk/client-scheduler";
 import { docClient, queryAll } from "../../shared/dynamodb";
 import { keys } from "../../shared/keys";
 import { createLogger } from "../../shared/logger";
@@ -12,21 +13,38 @@ import { Location, Order, OrderCreatedDetail, OrderLineItem, StockItem } from ".
 const ORDERS_TABLE_NAME = process.env.ORDERS_TABLE_NAME;
 const STOCK_TABLE_NAME = process.env.STOCK_TABLE_NAME;
 const LOCATIONS_TABLE_NAME = process.env.LOCATIONS_TABLE_NAME;
+const HOLD_MINUTES = Number(process.env.HOLD_MINUTES);
+const HOLD_SCHEDULE_GROUP = process.env.HOLD_SCHEDULE_GROUP;
+const HOLD_EXPIRY_TARGET_ARN = process.env.HOLD_EXPIRY_TARGET_ARN;
+const HOLD_SCHEDULER_ROLE_ARN = process.env.HOLD_SCHEDULER_ROLE_ARN;
 
 // A stock condition can fail because another order took the stock between our read and our write.
 // Each retry re-reads stock and re-allocates; past this, the message goes back to SQS.
 const MAX_ALLOCATION_ATTEMPTS = 3;
 
-type Outcome = "COMPLETED" | "FAILED_INSUFFICIENT_STOCK" | "ALREADY_PROCESSED";
+// Scheduler can't fire in the past; a hold that lapsed while the order sat in the queue expires shortly after
+const MIN_SCHEDULE_LEAD_MS = 60_000;
+
+const scheduler = new SchedulerClient({});
+
+type Outcome = "RESERVED" | "FAILED_INSUFFICIENT_STOCK" | "ALREADY_PROCESSED";
 
 // Partial batch response: only the records listed here go back to the queue for retry
 // (and eventually the DLQ). Every other record in the batch is deleted as done.
 export async function handler(event: SQSEvent, context: Context): Promise<SQSBatchResponse> {
   const log = createLogger(context, { batchSize: event.Records.length });
 
-  if (!ORDERS_TABLE_NAME || !STOCK_TABLE_NAME || !LOCATIONS_TABLE_NAME) {
+  if (
+    !ORDERS_TABLE_NAME ||
+    !STOCK_TABLE_NAME ||
+    !LOCATIONS_TABLE_NAME ||
+    !(HOLD_MINUTES > 0) ||
+    !HOLD_SCHEDULE_GROUP ||
+    !HOLD_EXPIRY_TARGET_ARN ||
+    !HOLD_SCHEDULER_ROLE_ARN
+  ) {
     // Throwing fails the whole batch, so nothing is lost while the config is broken
-    throw new Error("ORDERS_TABLE_NAME, STOCK_TABLE_NAME or LOCATIONS_TABLE_NAME environment variable is not set");
+    throw new Error("A table name or HOLD_* environment variable is not set");
   }
 
   const batchItemFailures: SQSBatchItemFailure[] = [];
@@ -72,23 +90,33 @@ async function processOrder(tenantId: string, orderId: string): Promise<Outcome>
     throw new Error(`Order ${orderId} not found`);
   }
 
-  // SQS is at-least-once: a redelivered message for a finished order is a no-op success
+  // SQS is at-least-once: a redelivered message for a settled order is a no-op success
   if (order.status !== "PENDING") {
     return "ALREADY_PROCESSED";
   }
 
-  const preference = shippingPreference(await loadLocations(tenantId));
+  const preference = sourcePreference(order, await loadLocations(tenantId));
+  // Derived from createdAt, so every retry computes the same deadline as the schedule already made
+  const holdExpiresAt =
+    order.fulfillment.type === "PICKUP"
+      ? new Date(Date.parse(order.createdAt) + HOLD_MINUTES * 60_000).toISOString()
+      : undefined;
 
   for (let attempt = 1; attempt <= MAX_ALLOCATION_ATTEMPTS; attempt++) {
-    const allocated = allocate(order.items, await loadStock(order), preference);
+    const allocated = allocate(order, await loadStock(order), preference);
     if (!allocated) {
       await markFailed(order, "Not enough stock at any one location for one or more items");
       return "FAILED_INSUFFICIENT_STOCK";
     }
 
+    // The expiry is scheduled before the stock is reserved, never after: if the transaction then
+    // fails, the expiry finds no RESERVED order and does nothing, but a reservation can never
+    // exist without its expiry. Scheduling is idempotent, so retries don't create a second one.
+    if (holdExpiresAt) await scheduleHoldExpiry(order, holdExpiresAt);
+
     try {
-      await reserveStockAndComplete(order, allocated);
-      return "COMPLETED";
+      await reserveStock(order, allocated, holdExpiresAt);
+      return "RESERVED";
     } catch (err) {
       if (!(err instanceof TransactionCanceledException)) throw err;
 
@@ -119,13 +147,20 @@ async function loadLocations(tenantId: string): Promise<Location[]> {
   });
 }
 
-// Shipping takes stock from the warehouse first, so store shelves stay stocked for walk-in and
-// pickup customers, then from the stores. Within each type, a stable order by location ID.
-function shippingPreference(locations: Location[]): string[] {
-  const rank = (location: Location) => (location.type === "WAREHOUSE" ? 0 : 1);
-  return [...locations]
-    .sort((a, b) => rank(a) - rank(b) || a.locationId.localeCompare(b.locationId))
-    .map((location) => location.locationId);
+// Where each line may come from, best first:
+// - PICKUP at a store: that store's own shelf, then the warehouse, then another store (a transfer)
+// - SHIP: the warehouse first, so store shelves stay stocked for walk-in and pickup customers, then the stores
+// Within each type, a stable order by location ID.
+function sourcePreference(order: Order, locations: Location[]): string[] {
+  const byId = (a: Location, b: Location) => a.locationId.localeCompare(b.locationId);
+  const warehouses = locations.filter((l) => l.type === "WAREHOUSE").sort(byId);
+  const stores = locations.filter((l) => l.type === "STORE").sort(byId);
+  const ids = (list: Location[]) => list.map((l) => l.locationId);
+
+  if (order.fulfillment.type === "SHIP") return [...ids(warehouses), ...ids(stores)];
+
+  const pickupAt = order.fulfillment.locationId;
+  return [pickupAt, ...ids(warehouses), ...ids(stores).filter((id) => id !== pickupAt)];
 }
 
 // Quantity per product per location, for just the products on this order: one Query per line,
@@ -151,24 +186,56 @@ async function loadStock(order: Order): Promise<Map<string, Map<string, number>>
 // Each line is filled from one location (never split), the first in preference order that holds
 // the whole quantity. Null if any line can't be filled that way - the order then fails as a whole.
 function allocate(
-  items: OrderLineItem[],
+  order: Order,
   stock: Map<string, Map<string, number>>,
   preference: string[],
 ): OrderLineItem[] | null {
+  const pickupAt = order.fulfillment.type === "PICKUP" ? order.fulfillment.locationId : undefined;
   const allocated: OrderLineItem[] = [];
-  for (const item of items) {
+
+  for (const item of order.items) {
     const atLocation = stock.get(item.productId);
     const source = preference.find((locationId) => (atLocation?.get(locationId) ?? 0) >= item.quantity);
     if (!source) return null;
-    allocated.push({ ...item, sourceLocationId: source });
+    allocated.push({
+      ...item,
+      sourceLocationId: source,
+      ...(pickupAt && { needsTransfer: source !== pickupAt }),
+    });
   }
   return allocated;
 }
 
+// One-time schedule that runs the expiry Lambda when the hold lapses, then deletes itself.
+// Named after the order, so a second attempt to create it fails with ConflictException.
+async function scheduleHoldExpiry(order: Order, holdExpiresAt: string): Promise<void> {
+  const fireAt = new Date(Math.max(Date.parse(holdExpiresAt), Date.now() + MIN_SCHEDULE_LEAD_MS));
+  try {
+    await scheduler.send(
+      new CreateScheduleCommand({
+        Name: `hold-${order.orderId}`,
+        GroupName: HOLD_SCHEDULE_GROUP,
+        ScheduleExpression: `at(${fireAt.toISOString().slice(0, 19)})`, // at() takes no milliseconds or zone
+        ScheduleExpressionTimezone: "UTC",
+        FlexibleTimeWindow: { Mode: "OFF" },
+        ActionAfterCompletion: "DELETE",
+        Target: {
+          Arn: HOLD_EXPIRY_TARGET_ARN,
+          RoleArn: HOLD_SCHEDULER_ROLE_ARN,
+          Input: JSON.stringify({ tenantId: order.tenantId, orderId: order.orderId }),
+        },
+      }),
+    );
+  } catch (err) {
+    if (!(err instanceof ConflictException)) throw err; // already scheduled by an earlier attempt
+  }
+}
+
 // One all-or-nothing transaction: decrement each line's stock at its allocated location (only if
-// enough is still there) AND move the order PENDING -> COMPLETE (only if still PENDING), recording
-// where each line came from. The status condition stops a duplicate delivery decrementing twice.
-async function reserveStockAndComplete(order: Order, allocated: OrderLineItem[]): Promise<void> {
+// enough is still there) AND move the order PENDING -> RESERVED (only if still PENDING), recording
+// where each line came from and, for a pickup, when the hold lapses. The status condition stops a
+// duplicate delivery decrementing twice.
+async function reserveStock(order: Order, allocated: OrderLineItem[], holdExpiresAt?: string): Promise<void> {
   await docClient.send(
     new TransactWriteCommand({
       TransactItems: [
@@ -185,15 +252,18 @@ async function reserveStockAndComplete(order: Order, allocated: OrderLineItem[])
           Update: {
             TableName: ORDERS_TABLE_NAME,
             Key: keys.order(order.tenantId, order.orderId),
-            UpdateExpression: "SET #status = :complete, #items = :items, updatedAt = :now",
+            UpdateExpression: `SET #status = :reserved, #items = :items, updatedAt = :now${
+              holdExpiresAt ? ", holdExpiresAt = :holdExpiresAt" : ""
+            }`,
             ConditionExpression: "#status = :pending",
             // "status" and "items" are DynamoDB reserved words, so they must be aliased
             ExpressionAttributeNames: { "#status": "status", "#items": "items" },
             ExpressionAttributeValues: {
-              ":complete": "COMPLETE",
+              ":reserved": "RESERVED",
               ":pending": "PENDING",
               ":items": allocated,
               ":now": new Date().toISOString(),
+              ...(holdExpiresAt && { ":holdExpiresAt": holdExpiresAt }),
             },
           },
         },

@@ -6,17 +6,20 @@ import {
   TransactWriteCommand,
   UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
+import { ConflictException, CreateScheduleCommand, SchedulerClient } from "@aws-sdk/client-scheduler";
 import { mockClient } from "aws-sdk-client-mock";
 import { context, logLines, orderCreatedMessage, sqsEvent, TENANT_ID } from "../../test/helpers";
 import { handler } from "./handler";
 
 const ddb = mockClient(DynamoDBDocumentClient);
+const scheduler = mockClient(SchedulerClient);
 
 const pendingOrder = {
   tenantId: TENANT_ID,
   orderId: "order_1",
   userId: "user-1",
   status: "PENDING",
+  fulfillment: { type: "SHIP" },
   total: 0.5,
   items: [
     { productId: "prod_001", quantity: 3, unitPrice: 0.1 },
@@ -25,6 +28,10 @@ const pendingOrder = {
   createdAt: "2026-11-01T00:00:00.000Z",
   updatedAt: "2026-11-01T00:00:00.000Z",
 };
+
+// Collected at Downtown; HOLD_MINUTES is 10 in test/env.ts
+const pickupOrder = { ...pendingOrder, fulfillment: { type: "PICKUP", locationId: "store_downtown" } };
+const HOLD_EXPIRES_AT = "2026-11-01T00:10:00.000Z";
 
 const orderCreated = orderCreatedMessage({ tenantId: TENANT_ID, orderId: "order_1", userId: "user-1", total: "0.5" });
 
@@ -85,11 +92,12 @@ function outcomes() {
 
 beforeEach(() => {
   ddb.reset();
+  scheduler.reset();
   ddb.on(QueryCommand, { TableName: "locations-table" }).resolves({ Items: locations });
 });
 
 describe("inventory handler", () => {
-  it("takes each line from the warehouse first and completes the order in one transaction", async () => {
+  it("ships each line from the warehouse first and reserves the order in one transaction", async () => {
     givenOrder(pendingOrder);
     givenStock("prod_001", { store_downtown: 9, warehouse_main: 5 });
     givenStock("prod_002", { warehouse_main: 1 });
@@ -121,7 +129,7 @@ describe("inventory handler", () => {
           Key: { tenantId: TENANT_ID, orderId: "order_1" },
           ConditionExpression: "#status = :pending",
           ExpressionAttributeValues: {
-            ":complete": "COMPLETE",
+            ":reserved": "RESERVED",
             // The order records where each line's stock was taken from
             ":items": [
               { productId: "prod_001", quantity: 3, unitPrice: 0.1, sourceLocationId: "warehouse_main" },
@@ -131,7 +139,9 @@ describe("inventory handler", () => {
         },
       },
     ]);
-    expect(outcomes()).toEqual(["COMPLETED"]);
+    expect(transaction.TransactItems?.[2].Update?.UpdateExpression).not.toContain("holdExpiresAt");
+    expect(scheduler).not.toHaveReceivedCommand(CreateScheduleCommand); // a shipment has no hold to expire
+    expect(outcomes()).toEqual(["RESERVED"]);
   });
 
   it("ships from a store when the warehouse can't fill the line, choosing stores in a stable order", async () => {
@@ -190,7 +200,7 @@ describe("inventory handler", () => {
     expect(result.batchItemFailures).toEqual([]);
     expect(ddb).toHaveReceivedCommandTimes(TransactWriteCommand, 2);
     expect(stockUpdates(1)[0]).toEqual({ tenantId: TENANT_ID, stockKey: "prod_001#store_downtown" });
-    expect(outcomes()).toEqual(["COMPLETED"]);
+    expect(outcomes()).toEqual(["RESERVED"]);
   });
 
   it("hands the message back to SQS when stock keeps changing on every attempt", async () => {
@@ -207,8 +217,115 @@ describe("inventory handler", () => {
     expect(ddb).not.toHaveReceivedCommand(UpdateCommand); // contention isn't a stock-out, so not FAILED
   });
 
+  describe("pickup orders", () => {
+    it("takes stock from the pickup store's own shelf first, with no transfer", async () => {
+      givenOrder(pickupOrder);
+      givenStock("prod_001", { warehouse_main: 50, store_downtown: 3 });
+      givenStock("prod_002", { warehouse_main: 50, store_downtown: 1 });
+
+      await handler(sqsEvent(orderCreated), context);
+
+      expect(stockUpdates()).toEqual([
+        { tenantId: TENANT_ID, stockKey: "prod_001#store_downtown" },
+        { tenantId: TENANT_ID, stockKey: "prod_002#store_downtown" },
+      ]);
+      const items = ddb.commandCalls(TransactWriteCommand)[0].args[0].input.TransactItems?.[2].Update
+        ?.ExpressionAttributeValues?.[":items"];
+      expect(items.map((item: { needsTransfer: boolean }) => item.needsTransfer)).toEqual([false, false]);
+    });
+
+    it("falls back to the warehouse, then another store, and flags those lines for transfer", async () => {
+      givenOrder(pickupOrder);
+      givenStock("prod_001", { store_downtown: 1, warehouse_main: 3 });
+      givenStock("prod_002", { store_downtown: 0, warehouse_main: 0, store_harbor: 2 });
+
+      await handler(sqsEvent(orderCreated), context);
+
+      const update = ddb.commandCalls(TransactWriteCommand)[0].args[0].input.TransactItems?.[2].Update;
+      expect(update?.ExpressionAttributeValues?.[":items"]).toEqual([
+        expect.objectContaining({ productId: "prod_001", sourceLocationId: "warehouse_main", needsTransfer: true }),
+        expect.objectContaining({ productId: "prod_002", sourceLocationId: "store_harbor", needsTransfer: true }),
+      ]);
+    });
+
+    it("sets the hold deadline from the order's creation time and schedules its expiry first", async () => {
+      givenOrder(pickupOrder);
+      givenStock("prod_001", { store_downtown: 5 });
+      givenStock("prod_002", { store_downtown: 5 });
+      jest.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-01T00:00:30.000Z"));
+
+      await handler(sqsEvent(orderCreated), context);
+
+      expect(scheduler).toHaveReceivedCommandWith(CreateScheduleCommand, {
+        Name: "hold-order_1",
+        GroupName: "holds-group",
+        ScheduleExpression: "at(2026-11-01T00:10:00)",
+        ScheduleExpressionTimezone: "UTC",
+        ActionAfterCompletion: "DELETE",
+        Target: {
+          Arn: "arn:aws:lambda:us-east-1:123456789012:function:expiry",
+          RoleArn: "arn:aws:iam::123456789012:role/hold-scheduler",
+          Input: JSON.stringify({ tenantId: TENANT_ID, orderId: "order_1" }),
+        },
+      });
+      const update = ddb.commandCalls(TransactWriteCommand)[0].args[0].input.TransactItems?.[2].Update;
+      expect(update?.UpdateExpression).toContain("holdExpiresAt = :holdExpiresAt");
+      expect(update?.ExpressionAttributeValues?.[":holdExpiresAt"]).toBe(HOLD_EXPIRES_AT);
+      // Scheduled before reserving, so a reservation can never exist without its expiry
+      expect(
+        scheduler.commandCalls(CreateScheduleCommand)[0].calledBefore(ddb.commandCalls(TransactWriteCommand)[0]),
+      ).toBe(true);
+    });
+
+    it("schedules a hold that lapsed while queued for shortly after now, never in the past", async () => {
+      givenOrder(pickupOrder);
+      givenStock("prod_001", { store_downtown: 5 });
+      givenStock("prod_002", { store_downtown: 5 });
+      jest.spyOn(Date, "now").mockReturnValue(Date.parse("2026-11-01T01:00:00.000Z"));
+
+      await handler(sqsEvent(orderCreated), context);
+
+      expect(scheduler).toHaveReceivedCommandWith(CreateScheduleCommand, { ScheduleExpression: "at(2026-11-01T01:01:00)" });
+    });
+
+    it("carries on when a retry finds the expiry already scheduled", async () => {
+      givenOrder(pickupOrder);
+      givenStock("prod_001", { store_downtown: 5 });
+      givenStock("prod_002", { store_downtown: 5 });
+      scheduler.on(CreateScheduleCommand).rejects(new ConflictException({ message: "exists", Message: "exists", $metadata: {} }));
+
+      const result = await handler(sqsEvent(orderCreated), context);
+
+      expect(result.batchItemFailures).toEqual([]);
+      expect(outcomes()).toEqual(["RESERVED"]);
+    });
+
+    it("leaves the message for a retry, with no stock reserved, when scheduling fails", async () => {
+      givenOrder(pickupOrder);
+      givenStock("prod_001", { store_downtown: 5 });
+      givenStock("prod_002", { store_downtown: 5 });
+      scheduler.on(CreateScheduleCommand).rejects(new Error("Rate exceeded"));
+
+      const result = await handler(sqsEvent(orderCreated), context);
+
+      expect(result.batchItemFailures).toEqual([{ itemIdentifier: "message-1" }]);
+      expect(ddb).not.toHaveReceivedCommand(TransactWriteCommand);
+    });
+
+    it("schedules nothing when no location can fill the order", async () => {
+      givenOrder(pickupOrder);
+      givenStock("prod_001", {});
+      givenStock("prod_002", {});
+
+      await handler(sqsEvent(orderCreated), context);
+
+      expect(scheduler).not.toHaveReceivedCommand(CreateScheduleCommand);
+      expect(outcomes()).toEqual(["FAILED_INSUFFICIENT_STOCK"]);
+    });
+  });
+
   it("treats a duplicate event for a finished order as done, without touching stock", async () => {
-    givenOrder({ ...pendingOrder, status: "COMPLETE" });
+    givenOrder({ ...pendingOrder, status: "RESERVED" });
 
     const result = await handler(sqsEvent(orderCreated), context);
 
@@ -218,7 +335,7 @@ describe("inventory handler", () => {
     expect(outcomes()).toEqual(["ALREADY_PROCESSED"]);
   });
 
-  it("treats a concurrent duplicate that completed the order first as done", async () => {
+  it("treats a concurrent duplicate that reserved the order first as done", async () => {
     givenOrder(pendingOrder);
     givenStock("prod_001", { warehouse_main: 5 });
     givenStock("prod_002", { warehouse_main: 5 });
@@ -286,7 +403,7 @@ describe("inventory handler", () => {
       { itemIdentifier: "message-3" },
       { itemIdentifier: "message-4" },
     ]);
-    expect(outcomes()).toEqual(["COMPLETED"]);
+    expect(outcomes()).toEqual(["RESERVED"]);
   });
 
   it("logs and retries when DynamoDB fails", async () => {

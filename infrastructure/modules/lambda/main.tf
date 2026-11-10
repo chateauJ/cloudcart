@@ -54,7 +54,8 @@ resource "aws_iam_role_policy" "this" {
           Action   = ["xray:PutTraceSegments", "xray:PutTelemetryRecords"]
           Resource = "*" # X-Ray actions don't support resource-level permissions
         },
-      ]
+      ],
+      var.extra_policy_statements,
     )
   })
 }

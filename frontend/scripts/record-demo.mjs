@@ -317,9 +317,9 @@ async function demo(b, credentials) {
   await sleep(1800);
   await b.click(byText("button", "Place order"));
 
-  // DynamoDB Streams -> EventBridge Pipe -> SQS -> Inventory Lambda completes it a few seconds later
+  // DynamoDB Streams -> EventBridge Pipe -> SQS -> Inventory Lambda reserves its stock a few seconds later
   await b.waitFor(path("/order"));
-  await b.waitFor(byText("span", "COMPLETE"), 60_000);
+  await b.waitFor(byText("span", "RESERVED"), 60_000);
   await sleep(3000);
 
   await b.click(byText("a", "← Back to orders"));

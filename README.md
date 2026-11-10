@@ -25,6 +25,7 @@ A serverless, event-driven e-commerce backend on AWS. Every resource is defined 
 | Multi-tenancy: every table partitioned by tenant, two seeded stores | Done |
 | API served through CloudFront at `/api`, catalog cached per store at the edge; AWS Budgets alert | Done |
 | Endless aisle: stores and a warehouse per business, stock per location, warehouse-first allocation | Done |
+| Pickup or ship at checkout, transfers between locations, pickup holds that expire on time (EventBridge Scheduler) | Done |
 
 ## Architecture
 
@@ -44,6 +45,9 @@ flowchart LR
     sqs -. after 5 failed receives .-> dlq[SQS DLQ]
     inventory -->|"conditional decrement, per location"| st
     inventory -->|status transition| ot
+    inventory -->|one schedule per pickup hold| sched[EventBridge Scheduler]
+    sched -->|at the hold deadline| expiry[expiry λ]
+    expiry -->|return stock, order EXPIRED| st
     bus --> sns[SNS order notifications] --> notifications[notifications λ]
 ```
 
@@ -69,7 +73,7 @@ sequenceDiagram
     EB->>Q: rule delivers to the order queue
     Q->>I: batch of messages
     I->>DB: read stock per location, pick one location per line
-    I->>DB: one transaction - decrement those stock rows, order PENDING to COMPLETE
+    I->>DB: one transaction - decrement those stock rows, order PENDING to RESERVED
     loop every 1.5 s until the order settles
         B->>API: GET /orders/{id}
     end
@@ -104,6 +108,8 @@ The API answers checkout before stock is reserved, so a slow or failing inventor
 - **Transactional checkout.** `POST /orders` uses `TransactWriteItems` to create the order and clear the cart together. A condition on the cart's `updatedAt` rejects a checkout against a cart that changed mid-request. Cart writes use the same optimistic-concurrency check.
 - **Partial batch failures.** The inventory Lambda reports failed message IDs individually, so one bad message is retried without re-running the rest of the batch.
 - **Stock per location, for endless aisle.** Each business has stores and a warehouse (`locations`), and stock is one row per product per location (`stock`, keyed `<productId>#<locationId>`), not a count on the product. A shopper sees what's at their chosen store and what the business holds everywhere else, and can buy either. The inventory Lambda fills each order line from one location: the warehouse first, so store shelves stay stocked for walk-in customers, then a store. If another order takes the stock between the read and the write, the transaction's condition fails and the Lambda re-reads and re-allocates, up to three times. The order records where each line came from.
+- **Pickup holds that expire on time.** A pickup order's stock is held until `holdExpiresAt` (10 minutes in dev, so it can be demoed; 48 hours in prod). The inventory Lambda creates a one-time EventBridge Scheduler schedule for the deadline *before* it reserves the stock, so a reservation can't exist without its expiry, and the schedule deletes itself after it runs. At the deadline the expiry Lambda returns each line's stock to the location it came from and marks the order `EXPIRED`, in one transaction conditional on the order still being held, so a duplicate or late run changes nothing. DynamoDB TTL was the alternative, but its deletes can lag by days.
+- **Pickup at any store, from any location.** For a pickup, each line comes from the pickup store's own shelf if it can, then the warehouse, then another store, and lines that come from elsewhere are flagged `needsTransfer`. That's the endless aisle: a shopper can collect at their local store something it doesn't stock.
 - **Pool multi-tenancy.** One deployment serves many businesses. Every table's partition key is `tenantId`, every request names its store with `X-Tenant-Id` (checked against a `tenants` table), and every DynamoDB key is built by one helper that takes the tenant first, so no handler can address another store's data by ID alone. A shopper's single Cognito account works at every store, with a separate cart and order history at each. Listing a catalog is a `Query` on the tenant's partition rather than a `Scan` of the table.
 - **Catalog caching at the edge, not in a cache cluster.** `GET /tenant`, `/products` and `/products/{id}` are cached at CloudFront for 30 seconds, with `X-Tenant-Id` in the cache key so each store is cached separately; a test proves one store's cached catalog is never served to another. Catalog reads are public, read-heavy and fine to be seconds stale, so this replaces DAX or ElastiCache at no cost. Every other route is never cached and is keyed on `Authorization`, because CloudFront strips that header from GET requests unless it's in the cache key. Stock is still enforced at checkout by the conditional write, so a stale catalog can't oversell.
 - **Separate directories per environment, not workspaces.** Each environment is its own root module and state file, so applying to the wrong one takes an explicit `cd`. Both call the same `modules/app`, and they differ only in a handful of arguments.
@@ -136,11 +142,11 @@ The hosted storefront calls the API at `<site_url>/api` (for example `/api/produ
 | GET | `/cart` | JWT | cart |
 | POST | `/cart/items` — `{ productId, quantity }` | JWT | cart |
 | DELETE | `/cart/items/{productId}` | JWT | cart |
-| POST | `/orders` — checks out the caller's cart | JWT | orders |
+| POST | `/orders` — checks out the caller's cart; body `{ fulfillment: { type: "SHIP" } }` or `{ fulfillment: { type: "PICKUP", locationId } }` | JWT | orders |
 | GET | `/orders` — caller's orders, newest first | JWT | orders |
 | GET | `/orders/{id}` | JWT | orders |
 
-New orders return `status: "PENDING"`. They move to `COMPLETE`, with each line's `sourceLocationId`, or to `FAILED` when no location can fill a line, once the inventory Lambda processes the event.
+New orders return `status: "PENDING"`. Once the inventory Lambda processes the event they move to `RESERVED`, with each line's `sourceLocationId` (and `needsTransfer` for a pickup) and a pickup's `holdExpiresAt`, or to `FAILED` when no location can fill a line. A pickup that isn't collected by its deadline becomes `EXPIRED` and its stock goes back on sale.
 
 Errors share one shape:
 
@@ -217,7 +223,7 @@ npm test
 npm run test:coverage
 ```
 
-The integration suite runs the full golden path against a deployed environment: sign in, list products, add to cart, check out, poll until the order completes, then check that the stock came from the warehouse and went down there. It also checks tenant isolation between the two seeded stores (`northlight` and `tidewater`): each has its own catalog where product IDs overlap, its own cart for the same shopper, and can't see the other's orders. With `CLOUDCART_SITE_URL` set (the `site_url` output), it also checks the CloudFront `/api` path: a repeat catalog request is a cache hit, each store is cached separately, signed-in requests carry their token and are never cached, and API errors arrive as JSON. It needs a confirmed Cognito test user.
+The integration suite runs the full golden path against a deployed environment: sign in, list products, add to cart, check out, poll until the order is reserved, then check that the stock came from the warehouse and went down there. A pickup order at a store that lacks the product must come back reserved with the line flagged for transfer and a hold deadline. It also checks tenant isolation between the two seeded stores (`northlight` and `tidewater`): each has its own catalog where product IDs overlap, its own cart for the same shopper, and can't see the other's orders. With `CLOUDCART_SITE_URL` set (the `site_url` output), it also checks the CloudFront `/api` path: a repeat catalog request is a cache hit, each store is cached separately, signed-in requests carry their token and are never cached, and API errors arrive as JSON. It needs a confirmed Cognito test user.
 
 ```bash
 cd backend

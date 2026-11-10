@@ -4,15 +4,16 @@ locals {
   app_prefixes = [for env in var.environments : "${var.project_name}-${env}"] # excludes the state backend and the CI role itself
 
   arn = {
-    dynamodb = "arn:aws:dynamodb:${local.region}:${local.account_id}"
-    sqs      = "arn:aws:sqs:${local.region}:${local.account_id}"
-    sns      = "arn:aws:sns:${local.region}:${local.account_id}"
-    lambda   = "arn:aws:lambda:${local.region}:${local.account_id}"
-    events   = "arn:aws:events:${local.region}:${local.account_id}"
-    pipes    = "arn:aws:pipes:${local.region}:${local.account_id}"
-    logs     = "arn:aws:logs:${local.region}:${local.account_id}"
-    alarms   = "arn:aws:cloudwatch:${local.region}:${local.account_id}"
-    iam      = "arn:aws:iam::${local.account_id}"
+    dynamodb  = "arn:aws:dynamodb:${local.region}:${local.account_id}"
+    sqs       = "arn:aws:sqs:${local.region}:${local.account_id}"
+    sns       = "arn:aws:sns:${local.region}:${local.account_id}"
+    lambda    = "arn:aws:lambda:${local.region}:${local.account_id}"
+    events    = "arn:aws:events:${local.region}:${local.account_id}"
+    pipes     = "arn:aws:pipes:${local.region}:${local.account_id}"
+    scheduler = "arn:aws:scheduler:${local.region}:${local.account_id}"
+    logs      = "arn:aws:logs:${local.region}:${local.account_id}"
+    alarms    = "arn:aws:cloudwatch:${local.region}:${local.account_id}"
+    iam       = "arn:aws:iam::${local.account_id}"
   }
 
   app_role_arns = [for p in local.app_prefixes : "${local.arn.iam}:role/${p}-*"]
@@ -58,6 +59,25 @@ resource "aws_iam_policy" "workload_boundary" { # the most any role CI creates c
         Effect   = "Allow"
         Action   = ["events:PutEvents"]
         Resource = [for p in local.app_prefixes : "${local.arn.events}:event-bus/${p}-*"]
+      },
+      {
+        Sid      = "AppFunctionInvoke" # the pickup-hold scheduler role runs the expiry Lambda
+        Effect   = "Allow"
+        Action   = ["lambda:InvokeFunction"]
+        Resource = [for p in local.app_prefixes : "${local.arn.lambda}:function:${p}-*"]
+      },
+      {
+        Sid      = "AppHoldSchedules" # the inventory Lambda schedules each pickup hold's expiry
+        Effect   = "Allow"
+        Action   = ["scheduler:CreateSchedule"]
+        Resource = [for p in local.app_prefixes : "${local.arn.scheduler}:schedule/${p}-*/*"]
+      },
+      {
+        Sid       = "PassAppRolesToScheduler" # a schedule runs as the role it's created with
+        Effect    = "Allow"
+        Action    = ["iam:PassRole"]
+        Resource  = local.app_role_arns
+        Condition = { StringEquals = { "iam:PassedToService" = "scheduler.amazonaws.com" } }
       },
       {
         Sid      = "AppLambdaLogs"
@@ -152,7 +172,7 @@ resource "aws_iam_role_policy" "github_actions_services" {
         # and it survives provider upgrades that add new read calls to refresh
         Sid    = "AppResourcesByName"
         Effect = "Allow"
-        Action = ["dynamodb:*", "sqs:*", "sns:*", "lambda:*", "events:*", "pipes:*", "logs:*", "cloudwatch:*", "s3:*"]
+        Action = ["dynamodb:*", "sqs:*", "sns:*", "lambda:*", "events:*", "pipes:*", "logs:*", "cloudwatch:*", "s3:*", "scheduler:*"]
         Resource = concat(flatten([for p in local.app_prefixes : [
           "arn:aws:s3:::${p}-site-*",           # the storefront bucket (named <prefix>-site-<account id>)
           "arn:aws:s3:::${p}-site-*/*",         # and its objects, for the deploy job's sync
@@ -163,6 +183,8 @@ resource "aws_iam_role_policy" "github_actions_services" {
           "${local.arn.events}:event-bus/${p}-*",
           "${local.arn.events}:rule/${p}-*", # rules on a custom bus are rule/<bus>/<rule>
           "${local.arn.pipes}:pipe/${p}-*",
+          "${local.arn.scheduler}:schedule-group/${p}-*", # the pickup-hold group; deleting it deletes its schedules
+          "${local.arn.scheduler}:schedule/${p}-*/*",
           "${local.arn.logs}:log-group:/aws/lambda/${p}-*",
           "${local.arn.logs}:log-group:/aws/apigateway/${p}-*",
           "${local.arn.alarms}:alarm:${p}-*",

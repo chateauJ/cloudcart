@@ -54,6 +54,12 @@ variable "dynamodb_access" {
   default = []
 }
 
+variable "extra_policy_statements" {
+  description = "Further IAM policy statements (Sid, Effect, Action, Resource, optional Condition) for services the variables above don't cover"
+  type        = any # statements differ in shape (some have a Condition), which no single object type allows
+  default     = []
+}
+
 variable "sqs_event_source" {
   type    = object({ queue_arn = string, batch_size = optional(number, 5) })
   default = null

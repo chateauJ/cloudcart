@@ -53,13 +53,18 @@ export interface Cart {
   updatedAt?: string; // absent until the cart is first saved - saveCart relies on this
 }
 
-export type OrderStatus = "PENDING" | "PROCESSING" | "COMPLETE" | "FAILED";
+// PENDING -> RESERVED (stock held) -> READY_FOR_PICKUP -> FULFILLED; a pickup hold can lapse to
+// EXPIRED (stock returned); FAILED when no location can fill a line
+export type OrderStatus = "PENDING" | "RESERVED" | "READY_FOR_PICKUP" | "FULFILLED" | "EXPIRED" | "FAILED";
+
+export type Fulfillment = { type: "PICKUP"; locationId: string } | { type: "SHIP" };
 
 export interface OrderLineItem {
   productId: string;
   quantity: number;
   unitPrice: number; // snapshot at order time, so later price changes don't rewrite history
   sourceLocationId?: string; // set by allocation: the location this line's stock was taken from
+  needsTransfer?: boolean; // PICKUP only: the stock is at another location and must be moved to the pickup store
 }
 
 export interface Order {
@@ -68,6 +73,9 @@ export interface Order {
   userId: string;
   tenantUser: string; // "<tenantId>#<userId>" - the user-index key; internal, never returned by the API
   status: OrderStatus;
+  fulfillment: Fulfillment;
+  tenantLocation?: string; // PICKUP only: "<tenantId>#<locationId>", for the staff pickup queue (8.6)
+  holdExpiresAt?: string; // PICKUP only, set when RESERVED: when unclaimed stock goes back on sale
   total: number;
   items: OrderLineItem[];
   createdAt: string;

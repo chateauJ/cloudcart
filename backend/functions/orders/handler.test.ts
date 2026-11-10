@@ -43,7 +43,8 @@ const storedOrder = {
   orderId: "order_1",
   userId: USER_ID,
   tenantUser: TENANT_USER,
-  status: "COMPLETE",
+  status: "RESERVED",
+  fulfillment: { type: "SHIP" },
   total: 0.5,
   items: [],
   createdAt: CART_UPDATED_AT,
@@ -59,8 +60,21 @@ function givenProducts(...products: object[]) {
   ddb.on(BatchGetCommand).resolves({ Responses: { "products-table": products } });
 }
 
-function createOrder() {
-  return handler(apiEvent({ routeKey: "POST /orders", userId: USER_ID }), context);
+const SHIP = { fulfillment: { type: "SHIP" } };
+const PICKUP_DOWNTOWN = { fulfillment: { type: "PICKUP", locationId: "store_downtown" } };
+
+// Every checkout names its fulfillment; tests that aren't about it ship
+function createOrder(body: unknown = SHIP) {
+  return checkout(body);
+}
+
+// Sends exactly this body - undefined means none at all
+function checkout(body: unknown) {
+  return handler(apiEvent({ routeKey: "POST /orders", userId: USER_ID, body }), context);
+}
+
+function givenLocation(value: object | undefined) {
+  ddb.on(GetCommand, { TableName: "locations-table" }).resolves({ Item: value });
 }
 
 function getOrder(orderId: string) {
@@ -103,6 +117,7 @@ describe("orders handler", () => {
         orderId: expect.stringMatching(/^order_[0-9a-f-]{36}$/),
         userId: USER_ID,
         status: "PENDING",
+        fulfillment: { type: "SHIP" },
         total: 0.3,
         items: [
           { productId: "prod_001", quantity: 1, unitPrice: 0.1 },
@@ -220,6 +235,76 @@ describe("orders handler", () => {
 
       expect(res.statusCode).toBe(500);
       expect(res.body.error.code).toBe("INTERNAL_ERROR");
+    });
+  });
+
+  describe("POST /orders fulfillment", () => {
+    it("records a pickup at one of the tenant's stores, keyed for that store's pickup queue", async () => {
+      givenLocation({ tenantId: TENANT_ID, locationId: "store_downtown", type: "STORE", pickupEnabled: true });
+      givenCart(cart);
+      givenProducts(sticker, pin);
+
+      const res = parseResponse(await createOrder(PICKUP_DOWNTOWN));
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body.fulfillment).toEqual({ type: "PICKUP", locationId: "store_downtown" });
+      expect(res.body).not.toHaveProperty("tenantLocation"); // an index key, not part of the API
+      expect(ddb).toHaveReceivedCommandWith(GetCommand, {
+        TableName: "locations-table",
+        Key: { tenantId: TENANT_ID, locationId: "store_downtown" },
+      });
+      const put = ddb.commandCalls(TransactWriteCommand)[0].args[0].input.TransactItems?.[0].Put;
+      expect(put?.Item).toMatchObject({
+        fulfillment: { type: "PICKUP", locationId: "store_downtown" },
+        tenantLocation: `${TENANT_ID}#store_downtown`,
+      });
+    });
+
+    it("stores a shipment without a pickup-queue key", async () => {
+      givenCart(cart);
+      givenProducts(sticker, pin);
+
+      await createOrder(SHIP);
+
+      const put = ddb.commandCalls(TransactWriteCommand)[0].args[0].input.TransactItems?.[0].Put;
+      expect(put?.Item).not.toHaveProperty("tenantLocation");
+      expect(ddb).not.toHaveReceivedCommandWith(GetCommand, { TableName: "locations-table" });
+    });
+
+    it.each([
+      ["the warehouse, which doesn't serve customers", { tenantId: TENANT_ID, locationId: "warehouse_main", pickupEnabled: false }],
+      ["a location this tenant doesn't have", undefined],
+    ])("rejects a pickup at %s", async (_case, location) => {
+      givenLocation(location);
+
+      const res = parseResponse(await createOrder({ fulfillment: { type: "PICKUP", locationId: "warehouse_main" } }));
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error.code).toBe("INVALID_PICKUP_LOCATION");
+      expect(ddb).not.toHaveReceivedCommand(TransactWriteCommand);
+    });
+
+    it.each([
+      ["no body", undefined],
+      ["no fulfillment", {}],
+      ["an unknown type", { fulfillment: { type: "DRONE" } }],
+      ["a pickup without a store", { fulfillment: { type: "PICKUP" } }],
+      ["a malformed store ID", { fulfillment: { type: "PICKUP", locationId: "store#1" } }],
+    ])("rejects checkout with %s before reading the cart", async (_case, body) => {
+      const res = parseResponse(await checkout(body));
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error.code).toBe("INVALID_REQUEST");
+      expect(dataCalls(ddb.calls())).toHaveLength(0);
+    });
+
+    it("rejects a body that isn't JSON", async () => {
+      const res = parseResponse(
+        await handler(apiEvent({ routeKey: "POST /orders", userId: USER_ID, rawBody: "{not json" }), context),
+      );
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error.code).toBe("INVALID_JSON");
     });
   });
 

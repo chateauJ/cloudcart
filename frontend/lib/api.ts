@@ -4,7 +4,7 @@
 
 import { fetchAuthSession } from "aws-amplify/auth";
 import { config } from "./config";
-import { Cart, Location, Order, Product, Tenant } from "./types";
+import { Cart, Fulfillment, Location, Order, Product, Tenant } from "./types";
 
 // Every handler returns errors as { error: { code, message } } (backend/shared/responses.ts)
 export class ApiError extends Error {
@@ -88,8 +88,8 @@ export function removeFromCart(productId: string): Promise<Cart> {
   return request<Cart>("DELETE", `/cart/items/${encodeURIComponent(productId)}`, { auth: true });
 }
 
-export function createOrder(): Promise<Order> {
-  return request<Order>("POST", "/orders", { auth: true });
+export function createOrder(fulfillment: Fulfillment): Promise<Order> {
+  return request<Order>("POST", "/orders", { auth: true, body: { fulfillment } });
 }
 
 export function listOrders(): Promise<Order[]> {
