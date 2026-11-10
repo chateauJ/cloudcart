@@ -4,7 +4,7 @@
 
 import { fetchAuthSession } from "aws-amplify/auth";
 import { config } from "./config";
-import { Cart, Order, Product, Tenant } from "./types";
+import { Cart, Location, Order, Product, Tenant } from "./types";
 
 // Every handler returns errors as { error: { code, message } } (backend/shared/responses.ts)
 export class ApiError extends Error {
@@ -56,6 +56,10 @@ async function request<T>(
 
 export function getTenant(): Promise<Tenant> {
   return request<Tenant>("GET", "/tenant");
+}
+
+export function listLocations(): Promise<Location[]> {
+  return request<Location[]>("GET", "/locations");
 }
 
 export function listProducts(): Promise<Product[]> {

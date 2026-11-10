@@ -4,6 +4,7 @@ import "./globals.css";
 import { AuthProvider } from "@/lib/AuthContext";
 import { CartProvider } from "@/lib/CartContext";
 import { CatalogProvider } from "@/lib/CatalogContext";
+import { StoreProvider } from "@/lib/StoreContext";
 import { TenantProvider } from "@/lib/TenantContext";
 import Navbar from "@/components/Navbar";
 
@@ -30,14 +31,18 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     >
       <body className="min-h-full flex flex-col">
         <TenantProvider>
-          <AuthProvider>
-            <CatalogProvider>
-              <CartProvider>
-                <Navbar />
-                <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8">{children}</main>
-              </CartProvider>
-            </CatalogProvider>
-          </AuthProvider>
+          <StoreProvider>
+            <AuthProvider>
+              <CatalogProvider>
+                <CartProvider>
+                  <Navbar />
+                  <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8">
+                    {children}
+                  </main>
+                </CartProvider>
+              </CatalogProvider>
+            </AuthProvider>
+          </StoreProvider>
         </TenantProvider>
       </body>
     </html>

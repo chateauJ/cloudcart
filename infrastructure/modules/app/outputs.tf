@@ -122,3 +122,13 @@ output "storefront_tenant_id" {
     error_message = "storefront_tenant_id must be a tenant in tenants.json."
   }
 }
+
+output "locations_table_name" {
+  description = "Locations table - each tenant's stores and warehouse"
+  value       = module.locations_table.table_name
+}
+
+output "stock_table_name" {
+  description = "Stock table - quantity per product per location; inspect it to watch orders decrement stock"
+  value       = module.stock_table.table_name
+}

@@ -6,13 +6,25 @@ export interface Tenant {
 
 export type ProductCategory = "cameras" | "phone-accessories";
 
+export interface Location {
+  locationId: string;
+  name: string;
+  type: "STORE" | "WAREHOUSE";
+  pickupEnabled: boolean;
+}
+
+export interface StockLevel {
+  locationId: string;
+  quantity: number;
+}
+
 export interface Product {
   productId: string;
   name: string;
   description: string;
   price: number;
-  inventory: number;
   category: ProductCategory;
+  stock: StockLevel[]; // per location; a location with no entry holds none
 }
 
 export interface CartItem {
@@ -32,6 +44,7 @@ export interface OrderLineItem {
   productId: string;
   quantity: number;
   unitPrice: number;
+  sourceLocationId?: string; // where the stock was taken from, once the order is processed
 }
 
 export interface Order {

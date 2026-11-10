@@ -24,6 +24,7 @@ A serverless, event-driven e-commerce backend on AWS. Every resource is defined 
 | Static storefront on S3 + CloudFront, deployed by the pipeline | Done |
 | Multi-tenancy: every table partitioned by tenant, two seeded stores | Done |
 | API served through CloudFront at `/api`, catalog cached per store at the edge; AWS Budgets alert | Done |
+| Endless aisle: stores and a warehouse per business, stock per location, warehouse-first allocation | Done |
 
 ## Architecture
 
@@ -34,13 +35,14 @@ flowchart LR
     cdn -->|"/api/* (catalog cached per store)"| api[API Gateway HTTP API]
     cognito[Cognito User Pool] -. issues / validates JWTs .- api
     api --> products[products λ] --> pt[(products)]
+    products --> st[(locations + stock)]
     api --> cart[cart λ] --> ct[(carts)]
     api --> orders[orders λ] --> ot[(orders)]
     ot -->|DynamoDB Stream, INSERT only| pipe[EventBridge Pipe]
     pipe -->|OrderCreated| bus[EventBridge bus]
     bus --> sqs[SQS order queue] --> inventory[inventory λ]
     sqs -. after 5 failed receives .-> dlq[SQS DLQ]
-    inventory -->|conditional decrement| pt
+    inventory -->|"conditional decrement, per location"| st
     inventory -->|status transition| ot
     bus --> sns[SNS order notifications] --> notifications[notifications λ]
 ```
@@ -66,13 +68,14 @@ sequenceDiagram
     DB-->>EB: stream INSERT becomes OrderCreated
     EB->>Q: rule delivers to the order queue
     Q->>I: batch of messages
-    I->>DB: one transaction - decrement stock, order PENDING to COMPLETE
+    I->>DB: read stock per location, pick one location per line
+    I->>DB: one transaction - decrement those stock rows, order PENDING to COMPLETE
     loop every 1.5 s until the order settles
         B->>API: GET /orders/{id}
     end
 ```
 
-The API answers checkout before inventory is reserved, so a slow or failing inventory step never blocks the customer. If stock ran out, the inventory Lambda marks the order `FAILED` with a reason instead.
+The API answers checkout before stock is reserved, so a slow or failing inventory step never blocks the customer. If no location can fill a line, the inventory Lambda marks the order `FAILED` with a reason instead.
 
 ### Screenshots
 
@@ -97,9 +100,10 @@ The API answers checkout before inventory is reserved, so a slow or failing inve
 ### Key design decisions
 
 - **No dual write.** If the orders Lambda wrote to DynamoDB and then called `PutEvents`, a crash between the two calls would leave an order with no event. Emitting events from the table's stream ties the event to the committed write, and the orders Lambda has no EventBridge permission at all.
-- **Idempotent consumer without an idempotency table.** SQS and Pipes both deliver at least once. The inventory Lambda decrements stock with `ConditionExpression: inventory >= :qty`, which also prevents overselling, and moves order status only from the expected prior state. A redelivered message fails the condition and is treated as already processed.
+- **Idempotent consumer without an idempotency table.** SQS and Pipes both deliver at least once. The inventory Lambda decrements stock with `ConditionExpression: quantity >= :qty`, which also prevents overselling, and moves order status only from the expected prior state. A redelivered message fails the condition and is treated as already processed.
 - **Transactional checkout.** `POST /orders` uses `TransactWriteItems` to create the order and clear the cart together. A condition on the cart's `updatedAt` rejects a checkout against a cart that changed mid-request. Cart writes use the same optimistic-concurrency check.
 - **Partial batch failures.** The inventory Lambda reports failed message IDs individually, so one bad message is retried without re-running the rest of the batch.
+- **Stock per location, for endless aisle.** Each business has stores and a warehouse (`locations`), and stock is one row per product per location (`stock`, keyed `<productId>#<locationId>`), not a count on the product. A shopper sees what's at their chosen store and what the business holds everywhere else, and can buy either. The inventory Lambda fills each order line from one location: the warehouse first, so store shelves stay stocked for walk-in customers, then a store. If another order takes the stock between the read and the write, the transaction's condition fails and the Lambda re-reads and re-allocates, up to three times. The order records where each line came from.
 - **Pool multi-tenancy.** One deployment serves many businesses. Every table's partition key is `tenantId`, every request names its store with `X-Tenant-Id` (checked against a `tenants` table), and every DynamoDB key is built by one helper that takes the tenant first, so no handler can address another store's data by ID alone. A shopper's single Cognito account works at every store, with a separate cart and order history at each. Listing a catalog is a `Query` on the tenant's partition rather than a `Scan` of the table.
 - **Catalog caching at the edge, not in a cache cluster.** `GET /tenant`, `/products` and `/products/{id}` are cached at CloudFront for 30 seconds, with `X-Tenant-Id` in the cache key so each store is cached separately; a test proves one store's cached catalog is never served to another. Catalog reads are public, read-heavy and fine to be seconds stale, so this replaces DAX or ElastiCache at no cost. Every other route is never cached and is keyed on `Authorization`, because CloudFront strips that header from GET requests unless it's in the cache key. Stock is still enforced at checkout by the conditional write, so a stale catalog can't oversell.
 - **Separate directories per environment, not workspaces.** Each environment is its own root module and state file, so applying to the wrong one takes an explicit `cd`. Both call the same `modules/app`, and they differ only in a handful of arguments.
@@ -111,7 +115,7 @@ The API answers checkout before inventory is reserved, so a slow or failing inve
 | Compute | AWS Lambda, Node.js 24, ARM64 (Graviton), bundled with esbuild |
 | API | API Gateway HTTP API (v2), native JWT authorizer, behind CloudFront |
 | Auth | Amazon Cognito User Pool + public app client |
-| Data | DynamoDB on-demand: `tenants`, `products`, `carts`, `orders` + `tenantUser-createdAt-index` GSI |
+| Data | DynamoDB on-demand: `tenants`, `locations`, `products`, `stock`, `carts`, `orders` + `tenantUser-createdAt-index` GSI |
 | Events | DynamoDB Streams, EventBridge Pipes, EventBridge custom bus, SQS + DLQ, SNS |
 | Observability | CloudWatch Logs (structured JSON), alarms, dashboard, Logs Insights queries, X-Ray |
 | IaC | Terraform 1.14, AWS provider 6.x, S3 remote state with DynamoDB locking, tflint |
@@ -126,8 +130,9 @@ The hosted storefront calls the API at `<site_url>/api` (for example `/api/produ
 | Method | Route | Auth | Lambda |
 | --- | --- | --- | --- |
 | GET | `/tenant` — the store's name and tagline | public | products |
-| GET | `/products` | public | products |
-| GET | `/products/{id}` | public | products |
+| GET | `/locations` — the business's stores and warehouse | public | products |
+| GET | `/products` — each with `stock: [{ locationId, quantity }]` | public | products |
+| GET | `/products/{id}` — with its stock per location | public | products |
 | GET | `/cart` | JWT | cart |
 | POST | `/cart/items` — `{ productId, quantity }` | JWT | cart |
 | DELETE | `/cart/items/{productId}` | JWT | cart |
@@ -135,7 +140,7 @@ The hosted storefront calls the API at `<site_url>/api` (for example `/api/produ
 | GET | `/orders` — caller's orders, newest first | JWT | orders |
 | GET | `/orders/{id}` | JWT | orders |
 
-New orders return `status: "PENDING"`. They move to `COMPLETE`, or to `FAILED` when stock runs out, once the inventory Lambda processes the event.
+New orders return `status: "PENDING"`. They move to `COMPLETE`, with each line's `sourceLocationId`, or to `FAILED` when no location can fill a line, once the inventory Lambda processes the event.
 
 Errors share one shape:
 
@@ -212,7 +217,7 @@ npm test
 npm run test:coverage
 ```
 
-The integration suite runs the full golden path against a deployed environment: sign in, list products, add to cart, check out, poll until the order completes, then check that stock went down. It also checks tenant isolation between the two seeded stores (`northlight` and `tidewater`): each has its own catalog where product IDs overlap, its own cart for the same shopper, and can't see the other's orders. With `CLOUDCART_SITE_URL` set (the `site_url` output), it also checks the CloudFront `/api` path: a repeat catalog request is a cache hit, each store is cached separately, signed-in requests carry their token and are never cached, and API errors arrive as JSON. It needs a confirmed Cognito test user.
+The integration suite runs the full golden path against a deployed environment: sign in, list products, add to cart, check out, poll until the order completes, then check that the stock came from the warehouse and went down there. It also checks tenant isolation between the two seeded stores (`northlight` and `tidewater`): each has its own catalog where product IDs overlap, its own cart for the same shopper, and can't see the other's orders. With `CLOUDCART_SITE_URL` set (the `site_url` output), it also checks the CloudFront `/api` path: a repeat catalog request is a cache hit, each store is cached separately, signed-in requests carry their token and are never cached, and API errors arrive as JSON. It needs a confirmed Cognito test user.
 
 ```bash
 cd backend

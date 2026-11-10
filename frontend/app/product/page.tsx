@@ -7,6 +7,8 @@ import * as api from "@/lib/api";
 import { Product } from "@/lib/types";
 import AddToCartButton from "@/components/AddToCartButton";
 import ProductImage from "@/components/ProductImage";
+import StockByLocation from "@/components/StockByLocation";
+import { maxPerLine, totalStock } from "@/lib/stock";
 
 // /product?id=<productId>: a static export can only pre-build pages for IDs known at build time,
 // so the ID is a query parameter and the product is fetched in the browser
@@ -82,11 +84,12 @@ function ProductDetail() {
           <p className="mt-3 text-foreground/70">{product.description}</p>
           <p className="mt-4 text-2xl font-semibold">${product.price.toFixed(2)}</p>
           <p className="mt-1 text-sm text-foreground/50">
-            {product.inventory > 0 ? `${product.inventory} in stock` : "Out of stock"}
+            {totalStock(product) > 0 ? `${totalStock(product)} in stock across all locations` : "Out of stock"}
           </p>
+          <StockByLocation product={product} />
 
           <div className="mt-6">
-            <AddToCartButton productId={product.productId} inventory={product.inventory} />
+            <AddToCartButton productId={product.productId} available={maxPerLine(product)} />
           </div>
         </div>
       </div>

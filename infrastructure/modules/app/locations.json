@@ -1,0 +1,37 @@
+[
+  {
+    "tenantId": "northlight",
+    "locationId": "store_downtown",
+    "name": "Downtown",
+    "type": "STORE",
+    "pickupEnabled": true
+  },
+  {
+    "tenantId": "northlight",
+    "locationId": "store_harbor",
+    "name": "Harbor",
+    "type": "STORE",
+    "pickupEnabled": true
+  },
+  {
+    "tenantId": "northlight",
+    "locationId": "warehouse_main",
+    "name": "Main warehouse",
+    "type": "WAREHOUSE",
+    "pickupEnabled": false
+  },
+  {
+    "tenantId": "tidewater",
+    "locationId": "store_boardwalk",
+    "name": "Boardwalk",
+    "type": "STORE",
+    "pickupEnabled": true
+  },
+  {
+    "tenantId": "tidewater",
+    "locationId": "warehouse_main",
+    "name": "Warehouse",
+    "type": "WAREHOUSE",
+    "pickupEnabled": false
+  }
+]

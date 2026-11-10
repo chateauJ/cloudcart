@@ -93,3 +93,11 @@ output "tenants_table_name" {
 output "storefront_tenant_id" {
   value = module.app.storefront_tenant_id
 }
+
+output "locations_table_name" {
+  value = module.app.locations_table_name
+}
+
+output "stock_table_name" {
+  value = module.app.stock_table_name
+}

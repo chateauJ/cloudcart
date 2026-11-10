@@ -5,13 +5,39 @@ export interface Tenant {
   tagline: string;
 }
 
+// A store or warehouse belonging to one tenant. Stock is held per location.
+export type LocationType = "STORE" | "WAREHOUSE";
+
+export interface Location {
+  tenantId: string;
+  locationId: string;
+  name: string;
+  type: LocationType;
+  pickupEnabled: boolean; // stores take pickups; the warehouse only ships
+}
+
+// One product's quantity at one location, keyed "<productId>#<locationId>" within the tenant.
+// The only stock record: products carry no count of their own.
+export interface StockItem {
+  tenantId: string;
+  stockKey: string;
+  productId: string;
+  locationId: string;
+  quantity: number;
+}
+
+// How the API presents a stock record on a product
+export interface StockLevel {
+  locationId: string;
+  quantity: number;
+}
+
 export interface Product {
   tenantId: string;
   productId: string;
   name: string;
   description: string;
   price: number;
-  inventory: number;
   category: string;
 }
 
@@ -33,6 +59,7 @@ export interface OrderLineItem {
   productId: string;
   quantity: number;
   unitPrice: number; // snapshot at order time, so later price changes don't rewrite history
+  sourceLocationId?: string; // set by allocation: the location this line's stock was taken from
 }
 
 export interface Order {

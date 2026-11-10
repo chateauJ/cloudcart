@@ -1,5 +1,14 @@
 import { api, Config, loadConfig, login, poll } from "./client";
 
+interface StockLevel {
+  locationId: string;
+  quantity: number;
+}
+
+const totalStock = (product: { stock: StockLevel[] }) => product.stock.reduce((sum, level) => sum + level.quantity, 0);
+const stockAt = (product: { stock: StockLevel[] }, locationId: string) =>
+  product.stock.find((level) => level.locationId === locationId)?.quantity ?? 0;
+
 // One customer journey through every deployed piece: Cognito -> HTTP API + JWT authorizer ->
 // Lambdas -> DynamoDB -> Streams -> Pipe -> EventBridge -> SQS -> Inventory Lambda.
 // Assumes no one else is buying from dev at the same time - it checks an exact stock change.
@@ -33,7 +42,23 @@ describe("CloudCart dev API", () => {
     expect(res.body).toMatchObject({ tenantId: config.tenantId, name: expect.any(String) });
   });
 
-  it("takes an order from cart to COMPLETE and decrements inventory", async () => {
+  it("lists the store's locations, and every product's stock is held at one of them", async () => {
+    const locations = await api(config, "GET", "/locations");
+    const catalog = await api(config, "GET", "/products");
+
+    expect(locations.status).toBe(200);
+    const types = locations.body.map((l: { type: string }) => l.type);
+    expect(types).toContain("STORE");
+    expect(types).toContain("WAREHOUSE");
+
+    const known = new Set(locations.body.map((l: { locationId: string }) => l.locationId));
+    for (const product of catalog.body) {
+      expect(product).not.toHaveProperty("inventory");
+      for (const level of product.stock) expect(known.has(level.locationId)).toBe(true);
+    }
+  });
+
+  it("takes an order from cart to COMPLETE and takes the stock from the warehouse first", async () => {
     // Start from an empty cart so leftovers from earlier manual testing don't end up in the order
     const existing = await api(config, "GET", "/cart", { token });
     for (const item of existing.body.items) {
@@ -42,11 +67,12 @@ describe("CloudCart dev API", () => {
 
     // Each run consumes one unit, so pick the best-stocked product to keep the suite repeatable
     const catalog = await api(config, "GET", "/products");
-    const product = [...catalog.body].sort((a, b) => b.inventory - a.inventory)[0];
-    if (!product || product.inventory < 1) {
-      throw new Error("Every dev product is out of stock - re-seed the products table before running");
+    const product = [...catalog.body].sort((a, b) => totalStock(b) - totalStock(a))[0];
+    if (!product || totalStock(product) < 1) {
+      throw new Error("Every dev product is out of stock - re-seed the stock table before running");
     }
-    const stockBefore = product.inventory;
+    const locations = await api(config, "GET", "/locations");
+    const warehouse: string = locations.body.find((l: { type: string }) => l.type === "WAREHOUSE").locationId;
 
     const added = await api(config, "POST", "/cart/items", {
       token,
@@ -71,8 +97,11 @@ describe("CloudCart dev API", () => {
     );
     expect(settled.body).toMatchObject({ orderId, status: "COMPLETE" });
 
+    // Shipping prefers the warehouse; the order records where the unit came from
+    const source: string = settled.body.items[0].sourceLocationId;
+    if (stockAt(product, warehouse) >= 1) expect(source).toBe(warehouse);
     const productAfter = await api(config, "GET", `/products/${product.productId}`);
-    expect(productAfter.body.inventory).toBe(stockBefore - 1);
+    expect(stockAt(productAfter.body, source)).toBe(stockAt(product, source) - 1);
 
     const history = await api(config, "GET", "/orders", { token });
     expect(history.body[0].orderId).toBe(orderId); // newest first
@@ -120,6 +149,15 @@ describe("Tenant isolation", () => {
     const mineShared = mine.body.find((m: { productId: string }) => m.productId === shared.productId);
     expect(mineShared.tenantId).toBe(config.tenantId);
     expect(mineShared.price).not.toBe(shared.price);
+  });
+
+  it("gives each store its own locations", async () => {
+    const mine = await api(config, "GET", "/locations");
+    const theirs = await api(config, "GET", "/locations", { tenant: config.otherTenantId });
+
+    const ids = (res: { body: Array<{ locationId: string }> }) => res.body.map((l) => l.locationId).sort();
+    expect(theirs.status).toBe(200);
+    expect(ids(theirs)).not.toEqual(ids(mine));
   });
 
   it("keeps a shopper's carts separate per store", async () => {

@@ -7,10 +7,10 @@ import { useCart } from "@/lib/CartContext";
 
 export default function AddToCartButton({
   productId,
-  inventory,
+  available,
 }: {
   productId: string;
-  inventory: number;
+  available: number; // the most one order line can take: the largest quantity at any one location
 }) {
   const { user } = useAuth();
   const { addItem, error } = useCart();
@@ -18,7 +18,7 @@ export default function AddToCartButton({
   const [quantity, setQuantity] = useState(1);
   const [justAdded, setJustAdded] = useState(false);
   const [failed, setFailed] = useState(false);
-  const maxQuantity = Math.min(inventory, 99); // the Cart API accepts at most 99 per add
+  const maxQuantity = Math.min(available, 99); // the Cart API accepts at most 99 per add
 
   async function handleAdd() {
     if (!user) {
@@ -32,7 +32,7 @@ export default function AddToCartButton({
     setTimeout(() => setJustAdded(false), 1500);
   }
 
-  if (inventory <= 0) {
+  if (available <= 0) {
     return (
       <button
         disabled

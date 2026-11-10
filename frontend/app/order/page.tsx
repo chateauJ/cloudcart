@@ -8,6 +8,7 @@ import { useCatalog } from "@/lib/CatalogContext";
 import * as api from "@/lib/api";
 import { Order } from "@/lib/types";
 import OrderStatusBadge from "@/components/OrderStatusBadge";
+import { useStore } from "@/lib/StoreContext";
 
 const POLL_INTERVAL_MS = 1500;
 const POLL_TIMEOUT_MS = 60_000; // stop polling a stuck order rather than hitting the API forever
@@ -26,6 +27,7 @@ function OrderDetail() {
   const id = useSearchParams().get("id") ?? "";
   const { user, isLoading } = useAuth();
   const { productById } = useCatalog();
+  const { locationById } = useStore();
   const router = useRouter();
   const [order, setOrder] = useState<Order | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
@@ -93,7 +95,7 @@ function OrderDetail() {
 
       {order.status === "PENDING" && (
         <p className="mt-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          Processing your order - inventory is being reserved asynchronously.
+          Processing your order - stock is being reserved asynchronously.
         </p>
       )}
       {order.status === "FAILED" && (
@@ -107,6 +109,11 @@ function OrderDetail() {
           <div key={line.productId} className="flex justify-between px-4 py-3 text-sm">
             <span>
               {productById(line.productId)?.name ?? line.productId} × {line.quantity}
+              {line.sourceLocationId && (
+                <span className="block text-xs text-foreground/50">
+                  From {locationById(line.sourceLocationId)?.name ?? line.sourceLocationId}
+                </span>
+              )}
             </span>
             {/* unitPrice is the price snapshotted when the order was placed */}
             <span className="font-medium">${(line.unitPrice * line.quantity).toFixed(2)}</span>

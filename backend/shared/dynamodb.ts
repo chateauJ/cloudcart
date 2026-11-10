@@ -1,5 +1,5 @@
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, QueryCommand, QueryCommandInput } from "@aws-sdk/lib-dynamodb";
 import { captureAWSv3Client } from "aws-xray-sdk-core";
 
 // Lambda sets this only when active tracing is on. Outside Lambda (e.g. unit tests) there's
@@ -16,3 +16,15 @@ const rawClient = new DynamoDBClient({});
 const client = tracingEnabled ? captureAWSv3Client(rawClient) : rawClient;
 
 export const docClient = DynamoDBDocumentClient.from(client);
+
+// Every item a Query matches, following LastEvaluatedKey past Query's 1 MB page limit
+export async function queryAll<T>(input: Omit<QueryCommandInput, "ExclusiveStartKey">): Promise<T[]> {
+  const items: T[] = [];
+  let startKey: Record<string, unknown> | undefined;
+  do {
+    const page = await docClient.send(new QueryCommand({ ...input, ExclusiveStartKey: startKey }));
+    items.push(...((page.Items ?? []) as T[]));
+    startKey = page.LastEvaluatedKey;
+  } while (startKey);
+  return items;
+}
