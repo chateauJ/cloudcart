@@ -15,7 +15,7 @@ data "aws_cloudfront_origin_request_policy" "all_viewer_except_host" {
   name = "Managed-AllViewerExceptHostHeader"
 }
 
-# Public catalog reads, cached briefly at the edge. X-Tenant-Id is in the cache key, so each store's
+# Public catalog reads (store, locations, products with stock), cached briefly at the edge. X-Tenant-Id is in the cache key, so each store's
 # catalog is cached separately - without it, the first store's products would be served to every store.
 # No query strings or cookies in the key: the catalog routes take none, and random ones can't bust the cache.
 # max_ttl caps the TTL too, so a Cache-Control header from the origin can't keep stock levels stale for longer.
@@ -129,6 +129,7 @@ locals {
   # Behaviours are matched in order: the cached catalog paths first, then everything else under /api/.
   api_behaviors = [
     { path = "/api/tenant", cache_policy_id = aws_cloudfront_cache_policy.catalog.id, origin_request_policy_id = null },
+    { path = "/api/locations", cache_policy_id = aws_cloudfront_cache_policy.catalog.id, origin_request_policy_id = null },
     { path = "/api/products*", cache_policy_id = aws_cloudfront_cache_policy.catalog.id, origin_request_policy_id = null },
     { path = "/api/*", cache_policy_id = aws_cloudfront_cache_policy.api_no_cache.id, origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer_except_host.id },
   ]

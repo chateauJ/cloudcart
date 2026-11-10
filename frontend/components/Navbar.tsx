@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/AuthContext";
 import { useCart } from "@/lib/CartContext";
 import { useTenant } from "@/lib/TenantContext";
+import StoreSelector from "./StoreSelector";
 
 export default function Navbar() {
   const { user, logout } = useAuth();
@@ -68,6 +69,11 @@ export default function Navbar() {
             </Link>
           )}
         </nav>
+      </div>
+      <div className="border-t border-foreground/5">
+        <div className="mx-auto flex max-w-5xl justify-end px-4 py-2">
+          <StoreSelector />
+        </div>
       </div>
     </header>
   );

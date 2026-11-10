@@ -13,7 +13,7 @@ variable "api_domain" {
 }
 
 variable "catalog_ttl_seconds" {
-  description = "How long the edge may serve a cached catalog response (GET /tenant, /products, /products/{id})"
+  description = "How long the edge may serve a cached catalog response (GET /tenant, /locations, /products, /products/{id})"
   type        = number
   default     = 30
 }

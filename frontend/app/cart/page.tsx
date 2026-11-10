@@ -7,6 +7,7 @@ import { useAuth } from "@/lib/AuthContext";
 import { useCart } from "@/lib/CartContext";
 import { useCatalog } from "@/lib/CatalogContext";
 import ProductImage from "@/components/ProductImage";
+import { maxPerLine } from "@/lib/stock";
 
 // Commits on blur or Enter rather than every keystroke - typing "12" would otherwise send
 // one request for 1 and another for 12
@@ -105,7 +106,7 @@ export default function CartPage() {
             </div>
             <QuantityInput
               value={item.quantity}
-              max={Math.min(99, product?.inventory ?? item.quantity)}
+              max={Math.min(99, product ? maxPerLine(product) : item.quantity)}
               onCommit={(quantity) => updateItem(item.productId, quantity)}
             />
             <span className="w-20 text-right font-medium">

@@ -16,6 +16,24 @@ module "products_table" {
   range_key_type = "S"
 }
 
+# Endless aisle: a tenant's stores and warehouse, and how many of each product each one holds.
+# Stock is its own table, not a count on the product, so it can be read and decremented per location.
+module "locations_table" {
+  source         = "../dynamodb"
+  table_name     = "${var.project_name}-${var.environment}-locations"
+  hash_key_name  = "tenantId"
+  range_key_name = "locationId"
+  range_key_type = "S"
+}
+
+module "stock_table" {
+  source         = "../dynamodb"
+  table_name     = "${var.project_name}-${var.environment}-stock"
+  hash_key_name  = "tenantId"
+  range_key_name = "stockKey" # "<productId>#<locationId>": begins_with finds one product's stock everywhere
+  range_key_type = "S"
+}
+
 module "products_lambda" {
   source                   = "../lambda"
   function_name            = "${var.project_name}-${var.environment}-products"
@@ -23,14 +41,20 @@ module "products_lambda" {
   permissions_boundary_arn = local.permissions_boundary_arn
 
   environment_variables = {
-    PRODUCTS_TABLE_NAME = module.products_table.table_name
-    TENANTS_TABLE_NAME  = module.tenants_table.table_name
+    PRODUCTS_TABLE_NAME  = module.products_table.table_name
+    TENANTS_TABLE_NAME   = module.tenants_table.table_name
+    LOCATIONS_TABLE_NAME = module.locations_table.table_name
+    STOCK_TABLE_NAME     = module.stock_table.table_name
   }
 
   dynamodb_access = [
     {
       actions       = ["dynamodb:GetItem", "dynamodb:Query"] # Query, not Scan: listing is always within one tenant
       resource_arns = [module.products_table.table_arn]
+    },
+    {
+      actions       = ["dynamodb:Query"] # read-only: only the inventory Lambda changes stock
+      resource_arns = [module.locations_table.table_arn, module.stock_table.table_arn]
     },
     {
       actions       = ["dynamodb:GetItem"]
@@ -169,8 +193,9 @@ module "inventory_lambda" {
   dist_dir                 = "${var.lambda_dist_dir}/inventory"
   permissions_boundary_arn = local.permissions_boundary_arn
   environment_variables = {
-    ORDERS_TABLE_NAME   = module.orders_table.table_name
-    PRODUCTS_TABLE_NAME = module.products_table.table_name
+    ORDERS_TABLE_NAME    = module.orders_table.table_name
+    STOCK_TABLE_NAME     = module.stock_table.table_name
+    LOCATIONS_TABLE_NAME = module.locations_table.table_name
   }
   dynamodb_access = [
     {
@@ -178,8 +203,12 @@ module "inventory_lambda" {
       resource_arns = [module.orders_table.table_arn]
     },
     {
-      actions       = ["dynamodb:UpdateItem"]
-      resource_arns = [module.products_table.table_arn]
+      actions       = ["dynamodb:Query", "dynamodb:UpdateItem"] # read stock to allocate, then decrement it
+      resource_arns = [module.stock_table.table_arn]
+    },
+    {
+      actions       = ["dynamodb:Query"] # which location is the warehouse
+      resource_arns = [module.locations_table.table_arn]
     }
   ]
   sqs_event_source = { queue_arn = module.order_queue.queue_arn }
@@ -218,6 +247,7 @@ module "api" {
   }
   routes = {
     "GET /tenant"             = { integration = "products" } # the storefront's name and tagline
+    "GET /locations"          = { integration = "products" } # the store's shops and warehouse
     "GET /products"           = { integration = "products" }
     "GET /products/{id}"      = { integration = "products" } # {id} must match event.pathParameters.id in the handler
     "GET /cart"               = { integration = "cart", authorization_required = true }
@@ -252,9 +282,11 @@ module "monitoring" {
   event_bus_name   = module.order_events.event_bus_name
   event_rule_names = module.order_events.rule_names
   dynamodb_table_names = {
-    tenants  = module.tenants_table.table_name
-    products = module.products_table.table_name
-    carts    = module.carts_table.table_name
-    orders   = module.orders_table.table_name
+    tenants   = module.tenants_table.table_name
+    locations = module.locations_table.table_name
+    stock     = module.stock_table.table_name
+    products  = module.products_table.table_name
+    carts     = module.carts_table.table_name
+    orders    = module.orders_table.table_name
   }
 }

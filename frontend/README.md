@@ -4,7 +4,12 @@ A thin Next.js storefront for demoing the CloudCart API. It's a static export (`
 plain HTML, CSS and JS that the deploy pipeline uploads to S3 and serves through CloudFront. There's
 no Node.js server, and every page fetches its data in the browser.
 
-- **Products** are public and fetched on every page visit, so stock levels are current.
+- **Products** are public and fetched on every page visit, so stock levels are current. Each carries
+  its stock per location.
+- **My store** (in the bar under the navbar) is the shopper's local shop, kept in `localStorage` per
+  storefront. The grid shows what's on that store's shelves and what's held elsewhere; the product
+  page lists every location. One order line is filled from one location, so the quantity picker's
+  maximum is the largest single location's stock.
 - **Pages for a specific product or order** take the ID as a query parameter (`/product?id=…`,
   `/order?id=…`). A static export can only pre-build pages for IDs known at build time.
 - **Sign-up, sign-in and the session** use Amazon Cognito through Amplify. Sign-in uses SRP, so the
@@ -69,6 +74,8 @@ Before recording, it empties that user's cart off camera, so every take starts t
 | `lib/CartContext.tsx` | The signed-in user's cart; every change round-trips the Cart API |
 | `lib/CatalogContext.tsx` | Product names and prices for the cart, checkout and order pages |
 | `lib/TenantContext.tsx` | The store's name and tagline, for the navbar and catalog header |
+| `lib/StoreContext.tsx` | The business's locations and the shopper's "My store" choice |
+| `lib/stock.ts` | Totals, per-location quantities and the per-line maximum from a product's stock |
 
 New orders start as `PENDING`. The order page polls until the asynchronous inventory flow (DynamoDB
-Streams → EventBridge Pipe → SQS → Inventory Lambda) marks the order `COMPLETE` or `FAILED`.
+Streams → EventBridge Pipe → SQS → Inventory Lambda) marks the order `COMPLETE` (showing where each line was taken from) or `FAILED`.

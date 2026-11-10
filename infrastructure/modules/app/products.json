@@ -5,8 +5,12 @@
     "name": "Aperture X7 Mirrorless Camera",
     "description": "24MP full-frame mirrorless camera with in-body stabilization and 4K60 video.",
     "price": 1799.99,
-    "inventory": 12,
-    "category": "cameras"
+    "category": "cameras",
+    "stock": {
+      "warehouse_main": 8,
+      "store_downtown": 3,
+      "store_harbor": 1
+    }
   },
   {
     "tenantId": "northlight",
@@ -14,8 +18,12 @@
     "name": "Aperture X7 Mirrorless Camera - Body Only",
     "description": "Same body as the X7 kit, without the 24-70mm lens.",
     "price": 1499.99,
-    "inventory": 18,
-    "category": "cameras"
+    "category": "cameras",
+    "stock": {
+      "warehouse_main": 14,
+      "store_downtown": 4,
+      "store_harbor": 0
+    }
   },
   {
     "tenantId": "northlight",
@@ -23,8 +31,12 @@
     "name": "Foco Pro 50mm f/1.4 Lens",
     "description": "Fast prime lens with silent autofocus, ideal for portraits.",
     "price": 449.0,
-    "inventory": 25,
-    "category": "cameras"
+    "category": "cameras",
+    "stock": {
+      "warehouse_main": 15,
+      "store_downtown": 6,
+      "store_harbor": 4
+    }
   },
   {
     "tenantId": "northlight",
@@ -32,8 +44,12 @@
     "name": "Vantage Point Action Camera",
     "description": "Waterproof to 33ft, 5.3K video, built-in image stabilization.",
     "price": 329.99,
-    "inventory": 40,
-    "category": "cameras"
+    "category": "cameras",
+    "stock": {
+      "warehouse_main": 30,
+      "store_downtown": 0,
+      "store_harbor": 10
+    }
   },
   {
     "tenantId": "northlight",
@@ -41,8 +57,12 @@
     "name": "Steadicam Mini Gimbal",
     "description": "3-axis handheld gimbal stabilizer for mirrorless cameras.",
     "price": 189.0,
-    "inventory": 30,
-    "category": "cameras"
+    "category": "cameras",
+    "stock": {
+      "warehouse_main": 20,
+      "store_downtown": 6,
+      "store_harbor": 4
+    }
   },
   {
     "tenantId": "northlight",
@@ -50,8 +70,12 @@
     "name": "TravelTripod Carbon 5-Section",
     "description": "Carbon fiber tripod, folds to 16in, 15lb load capacity.",
     "price": 219.99,
-    "inventory": 22,
-    "category": "cameras"
+    "category": "cameras",
+    "stock": {
+      "warehouse_main": 0,
+      "store_downtown": 12,
+      "store_harbor": 10
+    }
   },
   {
     "tenantId": "northlight",
@@ -59,8 +83,12 @@
     "name": "SnapGrip MagSafe Battery Case",
     "description": "5000mAh magnetic battery pack with built-in shutter button.",
     "price": 59.99,
-    "inventory": 80,
-    "category": "phone-accessories"
+    "category": "phone-accessories",
+    "stock": {
+      "warehouse_main": 60,
+      "store_downtown": 12,
+      "store_harbor": 8
+    }
   },
   {
     "tenantId": "northlight",
@@ -68,8 +96,12 @@
     "name": "ClearView Tempered Glass (2-Pack)",
     "description": "9H hardness screen protector with edge-to-edge coverage.",
     "price": 14.99,
-    "inventory": 200,
-    "category": "phone-accessories"
+    "category": "phone-accessories",
+    "stock": {
+      "warehouse_main": 150,
+      "store_downtown": 30,
+      "store_harbor": 20
+    }
   },
   {
     "tenantId": "northlight",
@@ -77,8 +109,12 @@
     "name": "OrbitMount Magnetic Car Vent Mount",
     "description": "Strong-hold magnetic phone mount for car air vents.",
     "price": 19.99,
-    "inventory": 150,
-    "category": "phone-accessories"
+    "category": "phone-accessories",
+    "stock": {
+      "warehouse_main": 110,
+      "store_downtown": 25,
+      "store_harbor": 15
+    }
   },
   {
     "tenantId": "northlight",
@@ -86,8 +122,12 @@
     "name": "FastCharge 65W GaN Wall Charger",
     "description": "Compact dual-port USB-C charger, fast-charges phone and laptop.",
     "price": 39.99,
-    "inventory": 95,
-    "category": "phone-accessories"
+    "category": "phone-accessories",
+    "stock": {
+      "warehouse_main": 70,
+      "store_downtown": 15,
+      "store_harbor": 10
+    }
   },
   {
     "tenantId": "northlight",
@@ -95,8 +135,12 @@
     "name": "ArmorShell Drop-Proof Case",
     "description": "Military-grade drop protection, raised bezel, wireless-charging safe.",
     "price": 29.99,
-    "inventory": 120,
-    "category": "phone-accessories"
+    "category": "phone-accessories",
+    "stock": {
+      "warehouse_main": 90,
+      "store_downtown": 20,
+      "store_harbor": 10
+    }
   },
   {
     "tenantId": "northlight",
@@ -104,8 +148,12 @@
     "name": "LumaRing Selfie Light Clip",
     "description": "Clip-on LED ring light with 3 brightness levels, USB-C rechargeable.",
     "price": 24.99,
-    "inventory": 60,
-    "category": "phone-accessories"
+    "category": "phone-accessories",
+    "stock": {
+      "warehouse_main": 0,
+      "store_downtown": 0,
+      "store_harbor": 6
+    }
   },
   {
     "tenantId": "tidewater",
@@ -113,8 +161,11 @@
     "name": "SnapGrip MagSafe Battery Case",
     "description": "5000mAh magnetic battery pack with built-in shutter button.",
     "price": 54.99,
-    "inventory": 40,
-    "category": "phone-accessories"
+    "category": "phone-accessories",
+    "stock": {
+      "warehouse_main": 30,
+      "store_boardwalk": 10
+    }
   },
   {
     "tenantId": "tidewater",
@@ -122,8 +173,11 @@
     "name": "OrbitMount Magnetic Car Vent Mount",
     "description": "Strong-hold magnetic phone mount for car air vents.",
     "price": 17.99,
-    "inventory": 75,
-    "category": "phone-accessories"
+    "category": "phone-accessories",
+    "stock": {
+      "warehouse_main": 60,
+      "store_boardwalk": 15
+    }
   },
   {
     "tenantId": "tidewater",
@@ -131,7 +185,10 @@
     "name": "ArmorShell Drop-Proof Case",
     "description": "Military-grade drop protection, raised bezel, wireless-charging safe.",
     "price": 32.99,
-    "inventory": 60,
-    "category": "phone-accessories"
+    "category": "phone-accessories",
+    "stock": {
+      "warehouse_main": 45,
+      "store_boardwalk": 15
+    }
   }
 ]

@@ -4,24 +4,29 @@ import {
   ConditionalCheckFailedException,
   TransactionCanceledException,
 } from "@aws-sdk/client-dynamodb";
-import { docClient } from "../../shared/dynamodb";
+import { docClient, queryAll } from "../../shared/dynamodb";
 import { keys } from "../../shared/keys";
 import { createLogger } from "../../shared/logger";
-import { Order, OrderCreatedDetail } from "../../shared/types";
+import { Location, Order, OrderCreatedDetail, OrderLineItem, StockItem } from "../../shared/types";
 
 const ORDERS_TABLE_NAME = process.env.ORDERS_TABLE_NAME;
-const PRODUCTS_TABLE_NAME = process.env.PRODUCTS_TABLE_NAME;
+const STOCK_TABLE_NAME = process.env.STOCK_TABLE_NAME;
+const LOCATIONS_TABLE_NAME = process.env.LOCATIONS_TABLE_NAME;
 
-type Outcome = "COMPLETED" | "FAILED_INSUFFICIENT_INVENTORY" | "ALREADY_PROCESSED";
+// A stock condition can fail because another order took the stock between our read and our write.
+// Each retry re-reads stock and re-allocates; past this, the message goes back to SQS.
+const MAX_ALLOCATION_ATTEMPTS = 3;
+
+type Outcome = "COMPLETED" | "FAILED_INSUFFICIENT_STOCK" | "ALREADY_PROCESSED";
 
 // Partial batch response: only the records listed here go back to the queue for retry
 // (and eventually the DLQ). Every other record in the batch is deleted as done.
 export async function handler(event: SQSEvent, context: Context): Promise<SQSBatchResponse> {
   const log = createLogger(context, { batchSize: event.Records.length });
 
-  if (!ORDERS_TABLE_NAME || !PRODUCTS_TABLE_NAME) {
+  if (!ORDERS_TABLE_NAME || !STOCK_TABLE_NAME || !LOCATIONS_TABLE_NAME) {
     // Throwing fails the whole batch, so nothing is lost while the config is broken
-    throw new Error("ORDERS_TABLE_NAME or PRODUCTS_TABLE_NAME environment variable is not set");
+    throw new Error("ORDERS_TABLE_NAME, STOCK_TABLE_NAME or LOCATIONS_TABLE_NAME environment variable is not set");
   }
 
   const batchItemFailures: SQSBatchItemFailure[] = [];
@@ -72,44 +77,107 @@ async function processOrder(tenantId: string, orderId: string): Promise<Outcome>
     return "ALREADY_PROCESSED";
   }
 
-  try {
-    await reserveInventoryAndComplete(order);
-    return "COMPLETED";
-  } catch (err) {
-    if (!(err instanceof TransactionCanceledException)) throw err;
+  const preference = shippingPreference(await loadLocations(tenantId));
 
-    const reasons = err.CancellationReasons ?? [];
-    const orderReason = reasons[reasons.length - 1]; // order update is the last transaction item
-    const productReasons = reasons.slice(0, -1);
+  for (let attempt = 1; attempt <= MAX_ALLOCATION_ATTEMPTS; attempt++) {
+    const allocated = allocate(order.items, await loadStock(order), preference);
+    if (!allocated) {
+      await markFailed(order, "Not enough stock at any one location for one or more items");
+      return "FAILED_INSUFFICIENT_STOCK";
+    }
 
-    if (orderReason?.Code === "ConditionalCheckFailed") {
-      // Another delivery of this same message completed the order first
-      return "ALREADY_PROCESSED";
+    try {
+      await reserveStockAndComplete(order, allocated);
+      return "COMPLETED";
+    } catch (err) {
+      if (!(err instanceof TransactionCanceledException)) throw err;
+
+      const reasons = err.CancellationReasons ?? [];
+      const orderReason = reasons[reasons.length - 1]; // the order update is the last transaction item
+      const stockReasons = reasons.slice(0, -1);
+
+      if (orderReason?.Code === "ConditionalCheckFailed") {
+        // Another delivery of this same message settled the order first
+        return "ALREADY_PROCESSED";
+      }
+      if (!stockReasons.some((reason) => reason.Code === "ConditionalCheckFailed")) {
+        // Throttling, TransactionConflict, etc. are transient - rethrow so the message is retried
+        throw err;
+      }
+      // Stock changed since it was read: read it again and re-allocate
     }
-    if (productReasons.some((reason) => reason.Code === "ConditionalCheckFailed")) {
-      await markFailed(order, "Insufficient inventory for one or more items");
-      return "FAILED_INSUFFICIENT_INVENTORY";
-    }
-    // Throttling, TransactionConflict, etc. are transient - rethrow so the message is retried
-    throw err;
   }
+
+  throw new Error(`Stock kept changing while allocating order ${orderId}; leaving it for an SQS retry`);
 }
 
-// One all-or-nothing transaction: decrement every product (only if enough stock) AND move the
-// order PENDING -> COMPLETE (only if still PENDING). No partial stock reservation is possible,
-// and the status condition makes a duplicate delivery unable to decrement stock twice.
-async function reserveInventoryAndComplete(order: Order): Promise<void> {
-  const now = new Date().toISOString();
+async function loadLocations(tenantId: string): Promise<Location[]> {
+  return queryAll<Location>({
+    TableName: LOCATIONS_TABLE_NAME,
+    KeyConditionExpression: "tenantId = :tenantId",
+    ExpressionAttributeValues: { ":tenantId": tenantId },
+  });
+}
 
+// Shipping takes stock from the warehouse first, so store shelves stay stocked for walk-in and
+// pickup customers, then from the stores. Within each type, a stable order by location ID.
+function shippingPreference(locations: Location[]): string[] {
+  const rank = (location: Location) => (location.type === "WAREHOUSE" ? 0 : 1);
+  return [...locations]
+    .sort((a, b) => rank(a) - rank(b) || a.locationId.localeCompare(b.locationId))
+    .map((location) => location.locationId);
+}
+
+// Quantity per product per location, for just the products on this order: one Query per line,
+// each on that product's stock rows
+async function loadStock(order: Order): Promise<Map<string, Map<string, number>>> {
+  const perLine = await Promise.all(
+    order.items.map((item) =>
+      queryAll<StockItem>({
+        TableName: STOCK_TABLE_NAME,
+        KeyConditionExpression: "tenantId = :tenantId AND begins_with(stockKey, :prefix)",
+        ExpressionAttributeValues: { ":tenantId": order.tenantId, ":prefix": keys.stockPrefix(item.productId) },
+      }),
+    ),
+  );
+
+  const stock = new Map<string, Map<string, number>>();
+  order.items.forEach((item, index) => {
+    stock.set(item.productId, new Map(perLine[index].map((row) => [row.locationId, row.quantity])));
+  });
+  return stock;
+}
+
+// Each line is filled from one location (never split), the first in preference order that holds
+// the whole quantity. Null if any line can't be filled that way - the order then fails as a whole.
+function allocate(
+  items: OrderLineItem[],
+  stock: Map<string, Map<string, number>>,
+  preference: string[],
+): OrderLineItem[] | null {
+  const allocated: OrderLineItem[] = [];
+  for (const item of items) {
+    const atLocation = stock.get(item.productId);
+    const source = preference.find((locationId) => (atLocation?.get(locationId) ?? 0) >= item.quantity);
+    if (!source) return null;
+    allocated.push({ ...item, sourceLocationId: source });
+  }
+  return allocated;
+}
+
+// One all-or-nothing transaction: decrement each line's stock at its allocated location (only if
+// enough is still there) AND move the order PENDING -> COMPLETE (only if still PENDING), recording
+// where each line came from. The status condition stops a duplicate delivery decrementing twice.
+async function reserveStockAndComplete(order: Order, allocated: OrderLineItem[]): Promise<void> {
   await docClient.send(
     new TransactWriteCommand({
       TransactItems: [
-        ...order.items.map((item) => ({
+        ...allocated.map((item) => ({
           Update: {
-            TableName: PRODUCTS_TABLE_NAME,
-            Key: keys.product(order.tenantId, item.productId),
-            UpdateExpression: "SET inventory = inventory - :qty",
-            ConditionExpression: "attribute_exists(productId) AND inventory >= :qty",
+            TableName: STOCK_TABLE_NAME,
+            Key: keys.stock(order.tenantId, item.productId, item.sourceLocationId!),
+            UpdateExpression: "SET quantity = quantity - :qty",
+            ConditionExpression: "quantity >= :qty", // also false when the stock row doesn't exist
             ExpressionAttributeValues: { ":qty": item.quantity },
           },
         })),
@@ -117,11 +185,16 @@ async function reserveInventoryAndComplete(order: Order): Promise<void> {
           Update: {
             TableName: ORDERS_TABLE_NAME,
             Key: keys.order(order.tenantId, order.orderId),
-            UpdateExpression: "SET #status = :complete, updatedAt = :now",
+            UpdateExpression: "SET #status = :complete, #items = :items, updatedAt = :now",
             ConditionExpression: "#status = :pending",
-            // "status" is a DynamoDB reserved word, so it must be aliased
-            ExpressionAttributeNames: { "#status": "status" },
-            ExpressionAttributeValues: { ":complete": "COMPLETE", ":pending": "PENDING", ":now": now },
+            // "status" and "items" are DynamoDB reserved words, so they must be aliased
+            ExpressionAttributeNames: { "#status": "status", "#items": "items" },
+            ExpressionAttributeValues: {
+              ":complete": "COMPLETE",
+              ":pending": "PENDING",
+              ":items": allocated,
+              ":now": new Date().toISOString(),
+            },
           },
         },
       ],

@@ -4,6 +4,8 @@ process.env.CARTS_TABLE_NAME = "carts-table";
 process.env.ORDERS_TABLE_NAME = "orders-table";
 process.env.ORDERS_USER_INDEX_NAME = "tenantUser-createdAt-index";
 process.env.TENANTS_TABLE_NAME = "tenants-table";
+process.env.LOCATIONS_TABLE_NAME = "locations-table";
+process.env.STOCK_TABLE_NAME = "stock-table";
 process.env.AWS_REGION = "us-east-1";
 
 // No X-Ray outside Lambda, and the logger's defaults apply unless a test opts in
