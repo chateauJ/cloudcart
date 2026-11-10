@@ -19,3 +19,14 @@ variable "environments" {
   type    = list(string)
   default = ["dev", "prod"]
 }
+
+variable "alarm_email" {
+  description = "Where budget alerts are emailed - set in the gitignored local.auto.tfvars, never committed"
+  type        = string
+}
+
+variable "monthly_budget_usd" {
+  description = "Monthly account spend that triggers the budget alerts"
+  type        = number
+  default     = 10
+}

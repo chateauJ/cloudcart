@@ -195,12 +195,13 @@ module "auth" {
 module "site" {
   source      = "../static-site"
   name_prefix = "${var.project_name}-${var.environment}"
+  api_domain  = trimprefix(module.api.api_endpoint, "https://") # served under the storefront's /api/*
 }
 
 module "api" {
   source             = "../api-gateway"
   api_name           = "${var.project_name}-${var.environment}-api"
-  cors_allow_origins = concat(var.cors_allow_origins, [module.site.url]) # the hosted storefront calls the API from its CloudFront origin
+  cors_allow_origins = var.cors_allow_origins # local development only - the hosted storefront calls /api on its own origin
   integrations = {
     products = {
       function_name = module.products_lambda.function_name

@@ -63,7 +63,7 @@ jobs:
       # Placeholder values: the build only inlines them, and nothing here calls the API.
       - run: npm run build
         env:
-          NEXT_PUBLIC_API_URL: https://api.example.invalid
+          NEXT_PUBLIC_API_URL: /api # what the hosted builds use
           NEXT_PUBLIC_COGNITO_USER_POOL_ID: us-east-1_placeholder
           NEXT_PUBLIC_COGNITO_CLIENT_ID: placeholder
           NEXT_PUBLIC_TENANT_ID: placeholder

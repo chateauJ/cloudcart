@@ -64,6 +64,7 @@ export async function login(config: Config): Promise<string> {
 
 export interface ApiResponse {
   status: number;
+  headers: Headers;
   body: any;
 }
 
@@ -71,8 +72,9 @@ export async function api(
   config: Config,
   method: string,
   path: string,
-  // tenant defaults to config.tenantId; null sends no X-Tenant-Id header
-  options: { token?: string; body?: unknown; tenant?: string | null } = {},
+  // tenant defaults to config.tenantId; null sends no X-Tenant-Id header.
+  // baseUrl defaults to the API's own endpoint; the edge checks pass the storefront's /api.
+  options: { token?: string; body?: unknown; tenant?: string | null; baseUrl?: string } = {},
 ): Promise<ApiResponse> {
   const headers: Record<string, string> = {};
   const tenant = options.tenant === undefined ? config.tenantId : options.tenant;
@@ -80,13 +82,13 @@ export async function api(
   if (options.token) headers.Authorization = `Bearer ${options.token}`;
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
 
-  const res = await fetch(`${config.apiUrl}${path}`, {
+  const res = await fetch(`${options.baseUrl ?? config.apiUrl}${path}`, {
     method,
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
   const text = await res.text();
-  return { status: res.status, body: text ? JSON.parse(text) : undefined };
+  return { status: res.status, headers: res.headers, body: text ? JSON.parse(text) : undefined };
 }
 
 export async function poll<T>(

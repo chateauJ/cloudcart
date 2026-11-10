@@ -50,7 +50,7 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
       - uses: ./.github/actions/frontend
         with:
-          api-url: ${{ steps.terraform.outputs.api_url }}
+          api-url: /api # the distribution routes /api/* to the HTTP API - same origin, so no CORS
           user-pool-id: ${{ steps.terraform.outputs.cognito_user_pool_id }}
           client-id: ${{ steps.terraform.outputs.cognito_client_id }}
           tenant-id: ${{ steps.terraform.outputs.storefront_tenant_id }}
@@ -83,6 +83,7 @@ jobs:
           CLOUDCART_COGNITO_CLIENT_ID: ${{ needs.deploy-dev.outputs.cognito_client_id }}
           CLOUDCART_TEST_USERNAME: ${{ vars.CLOUDCART_TEST_USERNAME }}
           CLOUDCART_TEST_PASSWORD: ${{ secrets.CLOUDCART_TEST_PASSWORD }}
+          CLOUDCART_SITE_URL: ${{ needs.deploy-dev.outputs.site_url }} # also runs the suite's edge checks through /api
       - name: Storefront serves through CloudFront
         env:
           SITE_URL: ${{ needs.deploy-dev.outputs.site_url }}
@@ -127,7 +128,6 @@ jobs:
       contents: read
       id-token: write
     outputs:
-      api_url: ${{ steps.terraform.outputs.api_url }}
       site_url: ${{ steps.terraform.outputs.site_url }}
       tenant_id: ${{ steps.terraform.outputs.storefront_tenant_id }}
     env:
@@ -146,7 +146,7 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
       - uses: ./.github/actions/frontend
         with:
-          api-url: ${{ steps.terraform.outputs.api_url }}
+          api-url: /api # the distribution routes /api/* to the HTTP API - same origin, so no CORS
           user-pool-id: ${{ steps.terraform.outputs.cognito_user_pool_id }}
           client-id: ${{ steps.terraform.outputs.cognito_client_id }}
           tenant-id: ${{ steps.terraform.outputs.storefront_tenant_id }}
@@ -160,15 +160,15 @@ jobs:
     timeout-minutes: 5
     steps:
       # Prod has no test user and no password login, so check the public contract only
+      # Through the storefront's /api/*, the path real shoppers use
       - name: Public route serves, protected route rejects anonymous calls, storefront serves
         env:
-          API_URL: ${{ needs.deploy-prod.outputs.api_url }}
           SITE_URL: ${{ needs.deploy-prod.outputs.site_url }}
           TENANT_ID: ${{ needs.deploy-prod.outputs.tenant_id }}
         run: |
           code() { curl -s -o /dev/null -w '%{http_code}' --retry 3 --retry-all-errors "$@"; }
-          products=$(code -H "X-Tenant-Id: $TENANT_ID" "$API_URL/products")
-          cart=$(code -H "X-Tenant-Id: $TENANT_ID" "$API_URL/cart")
+          products=$(code -H "X-Tenant-Id: $TENANT_ID" "$SITE_URL/api/products")
+          cart=$(code -H "X-Tenant-Id: $TENANT_ID" "$SITE_URL/api/cart")
           page=$(code "$SITE_URL/products/")
-          echo "GET /products -> $products (want 200), GET /cart without a token -> $cart (want 401), storefront /products/ -> $page (want 200)"
+          echo "GET /api/products -> $products (want 200), GET /api/cart without a token -> $cart (want 401), storefront /products/ -> $page (want 200)"
           [ "$products" = "200" ] && [ "$cart" = "401" ] && [ "$page" = "200" ]

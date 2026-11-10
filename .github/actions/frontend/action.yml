@@ -3,7 +3,7 @@ description: Build the static storefront against one environment's API and Cogni
 
 inputs:
   api-url:
-    description: API endpoint the storefront calls
+    description: API base URL the storefront calls - /api for the hosted builds, served by the same CloudFront distribution
     required: true
   user-pool-id:
     description: Cognito user pool ID
