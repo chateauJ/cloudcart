@@ -132,3 +132,8 @@ output "stock_table_name" {
   description = "Stock table - quantity per product per location; inspect it to watch orders decrement stock"
   value       = module.stock_table.table_name
 }
+
+output "staff_group_names" {
+  description = "Cognito group per tenant whose members are that business's staff"
+  value       = { for tenantId, group in aws_cognito_user_group.staff : tenantId => group.name }
+}

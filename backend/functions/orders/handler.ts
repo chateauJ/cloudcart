@@ -152,7 +152,8 @@ async function createOrder(
     tenantUser: keys.tenantUser(tenantId, userId),
     status: "PENDING", // stock is allocated and reserved asynchronously by the inventory Lambda, not here
     fulfillment,
-    ...(fulfillment.type === "PICKUP" && { tenantLocation: keys.tenantLocation(tenantId, fulfillment.locationId) }),
+    tenantQueue: keys.tenantQueue(tenantId, fulfillment),
+    channel: "ONLINE",
     total: calculateTotal(items),
     items,
     createdAt: now,
@@ -234,12 +235,12 @@ function parseFulfillment(body: unknown): Fulfillment | null {
   return null;
 }
 
-// tenantUser and tenantLocation only exist to key indexes - they aren't part of the API's order shape
+// tenantUser and tenantQueue only exist to key indexes - they aren't part of the API's order shape
 function publicOrder({
   tenantUser: _userIndexKey,
-  tenantLocation: _locationIndexKey,
+  tenantQueue: _queueIndexKey,
   ...order
-}: Order): Omit<Order, "tenantUser" | "tenantLocation"> {
+}: Order): Omit<Order, "tenantUser" | "tenantQueue"> {
   return order;
 }
 

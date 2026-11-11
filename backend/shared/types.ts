@@ -57,6 +57,9 @@ export interface Cart {
 // EXPIRED (stock returned); FAILED when no location can fill a line
 export type OrderStatus = "PENDING" | "RESERVED" | "READY_FOR_PICKUP" | "FULFILLED" | "EXPIRED" | "FAILED";
 
+// ONLINE: the shopper checked out themselves. IN_STORE: staff took the sale at a store's counter.
+export type OrderChannel = "ONLINE" | "IN_STORE";
+
 export type Fulfillment = { type: "PICKUP"; locationId: string } | { type: "SHIP" };
 
 export interface OrderLineItem {
@@ -74,7 +77,8 @@ export interface Order {
   tenantUser: string; // "<tenantId>#<userId>" - the user-index key; internal, never returned by the API
   status: OrderStatus;
   fulfillment: Fulfillment;
-  tenantLocation?: string; // PICKUP only: "<tenantId>#<locationId>", for the staff pickup queue (8.6)
+  tenantQueue: string; // the staff work queue it's in: "<tenantId>#<pickup locationId>", or "<tenantId>#SHIP"
+  channel: OrderChannel;
   holdExpiresAt?: string; // PICKUP only, set when RESERVED: when unclaimed stock goes back on sale
   total: number;
   items: OrderLineItem[];

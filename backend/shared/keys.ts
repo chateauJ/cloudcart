@@ -1,3 +1,5 @@
+import { Fulfillment } from "./types";
+
 // Every DynamoDB key is built here, and every builder takes the tenant first. A handler can't
 // read or write an item without naming the tenant it belongs to, so one store's request can
 // never address another store's data by ID alone.
@@ -15,6 +17,8 @@ export const keys = {
   stockPrefix: (productId: string) => `${productId}#`,
   // The orders table's user-index partition key: one shopper's history at one store
   tenantUser: (tenantId: string, userId: string) => `${tenantId}#${userId}`,
-  // A pickup order's store, for the pickup-queue index: one store's orders at one tenant
-  tenantLocation: (tenantId: string, locationId: string) => `${tenantId}#${locationId}`,
+  // The staff queue an order waits in: its pickup store's, or the tenant's one shipping queue.
+  // Location IDs are lowercase, so the uppercase SHIP can never collide with one.
+  tenantQueue: (tenantId: string, fulfillment: Fulfillment) =>
+    `${tenantId}#${fulfillment.type === "PICKUP" ? fulfillment.locationId : "SHIP"}`,
 };
