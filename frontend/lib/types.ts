@@ -55,6 +55,10 @@ export interface Order {
   userId: string;
   status: OrderStatus;
   fulfillment: Fulfillment;
+  channel: "ONLINE" | "IN_STORE";
+  placedAtLocationId?: string; // in-store sales: the store that took it
+  readyAt?: string;
+  fulfilledAt?: string;
   holdExpiresAt?: string; // pickup only, once reserved
   total: number;
   items: OrderLineItem[];

@@ -8,12 +8,13 @@
     "test": "jest",
     "test:coverage": "jest --coverage",
     "test:integration": "jest --config jest.integration.config.js",
-    "build": "npm run build:products && npm run build:cart && npm run build:orders && npm run build:inventory && npm run build:expiry && npm run build:notifications",
+    "build": "npm run build:products && npm run build:cart && npm run build:orders && npm run build:inventory && npm run build:expiry && npm run build:staff && npm run build:notifications",
     "build:products": "esbuild functions/products/handler.ts --bundle --minify --platform=node --target=node24 --outfile=dist/products/index.js",
     "build:cart": "esbuild functions/cart/handler.ts --bundle --minify --platform=node --target=node24 --outfile=dist/cart/index.js",
     "build:orders": "esbuild functions/orders/handler.ts --bundle --minify --platform=node --target=node24 --outfile=dist/orders/index.js",
     "build:inventory": "esbuild functions/inventory/handler.ts --bundle --minify --platform=node --target=node24 --outfile=dist/inventory/index.js",
     "build:expiry": "esbuild functions/expiry/handler.ts --bundle --minify --platform=node --target=node24 --outfile=dist/expiry/index.js",
+    "build:staff": "esbuild functions/staff/handler.ts --bundle --minify --platform=node --target=node24 --outfile=dist/staff/index.js",
     "build:notifications": "esbuild functions/notifications/handler.ts --bundle --minify --platform=node --target=node24 --outfile=dist/notifications/index.js"
   },
   "dependencies": {

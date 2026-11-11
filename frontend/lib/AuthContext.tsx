@@ -30,6 +30,7 @@ Amplify.configure({
 interface AuthUser {
   userId: string; // Cognito's sub - the same ID the API reads from the token
   email: string;
+  isStaff: boolean; // in this storefront's staff-<tenantId> group; the API checks the same thing itself
 }
 
 // What the UI does next: "DONE" means signed in, "CONFIRM_SIGN_UP" means go enter the emailed code
@@ -47,12 +48,15 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
-// The ID token already carries sub and email, so no extra Cognito call is needed
+// The ID token already carries sub and email, and the access token the groups, so no extra
+// Cognito call is needed. Group changes show up after the next sign-in, when new tokens are issued.
 async function currentUser(): Promise<AuthUser | null> {
   try {
     const { tokens } = await fetchAuthSession();
     const { sub, email } = tokens?.idToken?.payload ?? {};
-    return typeof sub === "string" ? { userId: sub, email: typeof email === "string" ? email : "" } : null;
+    const groups = tokens?.accessToken?.payload["cognito:groups"];
+    const isStaff = Array.isArray(groups) && groups.includes(`staff-${config.tenantId}`);
+    return typeof sub === "string" ? { userId: sub, email: typeof email === "string" ? email : "", isStaff } : null;
   } catch {
     return null;
   }

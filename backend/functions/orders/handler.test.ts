@@ -301,6 +301,79 @@ describe("orders handler", () => {
       expect(dataCalls(ddb.calls())).toHaveLength(0);
     });
 
+    it("records an in-store sale rung up by the tenant's staff at one of its stores", async () => {
+      ddb.on(GetCommand, { TableName: "locations-table" }).resolves({
+        Item: { tenantId: TENANT_ID, locationId: "store_harbor", type: "STORE", pickupEnabled: true },
+      });
+      givenCart(cart);
+      givenProducts(sticker, pin);
+
+      const res = parseResponse(
+        await handler(
+          apiEvent({
+            routeKey: "POST /orders",
+            userId: USER_ID,
+            groups: `[staff-${TENANT_ID}]`,
+            body: { ...SHIP, channel: "IN_STORE", placedAtLocationId: "store_harbor" },
+          }),
+          context,
+        ),
+      );
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body).toMatchObject({ channel: "IN_STORE", placedAtLocationId: "store_harbor" });
+    });
+
+    it.each([
+      ["a shopper", "[]"],
+      ["staff of another business", "[staff-tidewater]"],
+    ])("refuses an in-store sale from %s", async (_case, groups) => {
+      const res = parseResponse(
+        await handler(
+          apiEvent({
+            routeKey: "POST /orders",
+            userId: USER_ID,
+            groups,
+            body: { ...SHIP, channel: "IN_STORE", placedAtLocationId: "store_harbor" },
+          }),
+          context,
+        ),
+      );
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error.code).toBe("INVALID_CHANNEL");
+      expect(ddb).not.toHaveReceivedCommand(TransactWriteCommand);
+    });
+
+    it("refuses an in-store sale placed at the warehouse", async () => {
+      ddb.on(GetCommand, { TableName: "locations-table" }).resolves({ Item: { type: "WAREHOUSE" } });
+
+      const res = parseResponse(
+        await handler(
+          apiEvent({
+            routeKey: "POST /orders",
+            userId: USER_ID,
+            groups: `[staff-${TENANT_ID}]`,
+            body: { ...SHIP, channel: "IN_STORE", placedAtLocationId: "warehouse_main" },
+          }),
+          context,
+        ),
+      );
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error.code).toBe("INVALID_LOCATION");
+    });
+
+    it.each([
+      ["an unknown channel", { ...SHIP, channel: "PHONE" }],
+      ["IN_STORE without a store", { ...SHIP, channel: "IN_STORE" }],
+    ])("rejects %s", async (_case, body) => {
+      const res = parseResponse(await checkout(body));
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error.code).toBe("INVALID_REQUEST");
+    });
+
     it("rejects a body that isn't JSON", async () => {
       const res = parseResponse(
         await handler(apiEvent({ routeKey: "POST /orders", userId: USER_ID, rawBody: "{not json" }), context),
