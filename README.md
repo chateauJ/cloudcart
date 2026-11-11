@@ -125,13 +125,13 @@ stateDiagram-v2
 
 ![GitHub Actions deploy run: tests, deploy dev, smoke test dev, plan prod, deploy prod, smoke test prod](docs/screenshots/pipeline.png)
 
-**CloudCart dashboard in CloudWatch (dev), after the demo run.** Every alarm is OK, and the spike on the right is the recorded session (see [Monitoring](#monitoring)).
+**CloudCart dashboard in CloudWatch (dev), after the demo run.** The spike on the right is the recorded session: API traffic, all seven Lambdas with no errors, the orders pipe and event deliveries, and reads and writes across the six tables (see [Monitoring](#monitoring)).
 
-![CloudWatch dashboard with alarm status, API, Lambda, pipe, queue and DynamoDB widgets](docs/screenshots/dashboard.png)
+![CloudWatch dashboard with API, Lambda, pipe, event rule, queue and DynamoDB widgets](docs/screenshots/dashboard.png)
 
-**X-Ray trace map.** Each Lambda and the DynamoDB tables it calls, drawn from the traces of the same session.
+**X-Ray trace map.** Each Lambda and the DynamoDB tables it calls, drawn from the traces of the same session, including the staff Lambda working the queue and the expiry Lambda run by the pickup hold's schedule.
 
-<img src="docs/screenshots/xray-trace-map.png" alt="X-Ray trace map: the products, cart, orders, staff, inventory and notifications Lambdas and the DynamoDB tables they call" width="560">
+<img src="docs/screenshots/xray-trace-map.png" alt="X-Ray trace map: the products, cart, orders, staff, inventory, expiry and notifications Lambdas and the DynamoDB tables they call" width="480">
 
 ### Key design decisions
 
