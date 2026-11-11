@@ -1,6 +1,9 @@
 // Records the README demo: a real browser session against a running storefront (npm run build &&
 // npm run preview, pointed at dev by npm run env:dev). Headless Chrome is driven over the DevTools
-// protocol with no extra packages; ffmpeg turns the captured frames into an MP4 and a GIF.
+// protocol with no extra packages; ffmpeg turns the captured frames into an MP4 and a GIF. The same
+// run saves the README's app screenshots (docs/screenshots/{products,product-detail,checkout,staff-queue}.png).
+// The demo user must be in the staff-northlight Cognito group, and the Downtown pickup queue should be
+// empty, so the staff part of the take shows only this order.
 //
 // Usage: npm run demo:record
 // Needs:  Google Chrome, ffmpeg, and .env.demo with CLOUDCART_DEMO_EMAIL / CLOUDCART_DEMO_PASSWORD
@@ -14,6 +17,7 @@ import { fileURLToPath } from "node:url";
 
 const FRONTEND_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT_DIR = join(FRONTEND_DIR, "..", "docs", "demo");
+const SCREENSHOT_DIR = join(FRONTEND_DIR, "..", "docs", "screenshots");
 const BASE_URL = process.env.DEMO_BASE_URL ?? "http://localhost:3000"; // the only origin dev's CORS allows
 const CHROME = process.env.CHROME_PATH ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const WIDTH = 1280;
@@ -221,6 +225,27 @@ class Browser {
     await this.cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: keyCode });
   }
 
+  // Picks an option in a <select> the way React sees a user doing it. The pointer glides to the
+  // control, but it isn't clicked: headless Chrome draws no native dropdown.
+  async select(selector, value) {
+    const { x, y } = await this.locate(bySelector(selector));
+    await this.moveTo(x, y);
+    await sleep(500);
+    await this.evaluate(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(el, ${JSON.stringify(value)});
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    })()`);
+  }
+
+  // A still for the README, without the drawn pointer
+  async still(name) {
+    await this.evaluate(`document.getElementById("__demo_cursor")?.style.setProperty("visibility", "hidden")`);
+    const { data } = await this.cdp.send("Page.captureScreenshot", { format: "png" });
+    writeFileSync(join(SCREENSHOT_DIR, name), Buffer.from(data, "base64"));
+    await this.evaluate(`document.getElementById("__demo_cursor")?.style.setProperty("visibility", "visible")`);
+  }
+
   async scrollTo(top, settleMs = 1400) {
     await this.evaluate(`window.scrollTo({ top: ${top}, behavior: "smooth" })`);
     await sleep(settleMs);
@@ -267,63 +292,84 @@ async function resetCart(b, credentials) {
   await b.waitFor(path("/login"));
 }
 
+// Endless aisle in one take: a shopper at the Downtown store buys a light only the Harbor store
+// stocks, picks it up at Downtown, and staff work the order through Downtown's pickup queue
 async function demo(b, credentials) {
-  // A shopper lands on the catalog, which the Products API serves from DynamoDB
+  // A shopper lands on the Northlight catalog and chooses their local store
   await b.goto("/products");
   await b.waitFor(bySelector(productLink("prod_012")));
   await sleep(1800);
-  await b.moveTo(640, 420, 900);
-  await b.scrollTo(720, 1800);
-  await b.scrollTo(0, 1400);
+  await b.select("header select", "store_downtown");
+  await b.waitFor(byText("span", "Not at Downtown"));
+  await sleep(1200);
+  await b.still("products.png");
+  // The LumaRing light isn't on Downtown's shelf, but the business holds it elsewhere
+  await b.scrollTo(1250, 1800);
+  await b.moveTo(980, 560, 900);
+  await sleep(1500);
+  await b.scrollTo(0, 1200);
 
   // Cognito sign-in (SRP - the password never leaves the browser)
   await logIn(b, credentials);
-  await sleep(1200);
+  await sleep(1000);
 
-  // Two products into the cart
-  await b.click(bySelector(productLink("prod_003")));
+  // The product page shows every location's stock: only Harbor has it
+  await b.click(bySelector(productLink("prod_012")));
   await b.waitFor(byText("button", "Add to cart"));
-  await sleep(1500);
+  await b.waitFor(byText("span", "Your store"));
+  await sleep(2200);
+  await b.still("product-detail.png");
   await b.click(byText("button", "Add to cart"));
   await b.waitFor(byText("button", "Added ✓"));
-  await sleep(1300);
+  await sleep(1200);
 
+  // A lens that is on Downtown's shelf
   await b.click(byText("header a", "Products"));
   await b.waitFor(path("/products"));
   await sleep(900);
-  await b.click(bySelector(productLink("prod_010")));
+  await b.click(bySelector(productLink("prod_003")));
   await b.waitFor(byText("button", "Add to cart"));
-  await sleep(1300);
+  await sleep(1200);
   await b.click(byText("button", "Add to cart"));
   await b.waitFor(byText("header a", "Cart (2)"));
-  await sleep(1300);
+  await sleep(1000);
 
-  // Cart: bump the charger to 2
+  // Checkout: pickup at My store is preselected, with a preview of what's on the shelf there
   await b.click(byText("header a", "Cart"));
-  await b.waitFor(bySelector(productLink("prod_010")));
-  await sleep(1500);
-  const chargerQty = `document.querySelector('${productLink("prod_010")}').closest(".py-4").querySelector("input")`;
-  await b.click(chargerQty);
-  await b.evaluate(`(${chargerQty}).select()`);
-  await sleep(300);
-  await b.type("2");
-  await b.press("Enter", "Enter", 13);
-  await b.waitFor(byText("header a", "Cart (3)"));
-  await sleep(1800);
-
-  // Checkout: the Orders API writes the order PENDING and returns at once
+  await b.waitFor(byText("a", "Checkout"));
+  await sleep(1200);
   await b.click(byText("a", "Checkout"));
-  await b.waitFor(byText("button", "Place order"));
-  await sleep(1800);
+  await b.waitFor(byText("span", "Transferred to Downtown from another location"));
+  await sleep(2200);
+  await b.still("checkout.png");
   await b.click(byText("button", "Place order"));
 
-  // DynamoDB Streams -> EventBridge Pipe -> SQS -> Inventory Lambda reserves its stock a few seconds later
+  // Streams -> Pipe -> SQS -> inventory Lambda allocates: the light comes from Harbor, the lens
+  // from Downtown's own shelf, and the stock is held until the pickup deadline
   await b.waitFor(path("/order"));
   await b.waitFor(byText("span", "RESERVED"), 60_000);
-  await sleep(3000);
+  const orderId = await b.evaluate(`document.querySelector("h1").textContent`);
+  await sleep(4000);
 
-  await b.click(byText("a", "← Back to orders"));
+  // Behind the counter: the same order in Downtown's pickup queue
+  const card = `[...document.querySelectorAll("div.rounded-lg")].find((el) => el.textContent.includes(${JSON.stringify(orderId)}))`;
+  await b.click(byText("header a", "Staff"));
+  await b.waitFor(card, 20_000);
+  await sleep(2500);
+  await b.still("staff-queue.png");
+  await b.click(`(${card}).querySelector("button")`);
+  await b.waitFor(`(${card})?.querySelector("button")?.textContent === "Mark picked up"`);
+  await sleep(2200);
+  await b.click(`(${card}).querySelector("button")`);
+  await b.waitFor(`!(${card})`);
+  await sleep(1500);
+
+  // And the shopper's view of it: collected
+  await b.click(byText("header a", "Orders"));
   await b.waitFor(byText("h1", "Your orders"));
+  await sleep(1200);
+  await b.click(`document.querySelector('a[href*=${JSON.stringify(orderId)}]')`);
+  await b.waitFor(byText("span", "FULFILLED"));
   await sleep(3500);
 }
 
@@ -347,8 +393,11 @@ async function main() {
     const b = new Browser(cdp);
     await cdp.send("Page.enable");
     await cdp.send("Emulation.setDeviceMetricsOverride", { width: WIDTH, height: HEIGHT, deviceScaleFactor: 1, mobile: false });
+    // Light theme, whatever the machine's setting, so the video and stills always match
+    await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] });
     await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: CURSOR_SCRIPT });
 
+    mkdirSync(SCREENSHOT_DIR, { recursive: true });
     console.log("Resetting the demo user's cart...");
     await resetCart(b, credentials);
 

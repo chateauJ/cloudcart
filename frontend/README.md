@@ -48,9 +48,19 @@ need no CORS, and catalog responses come from the edge cache.
 ## Recording the demo
 
 `npm run demo:record` re-records the demo at the top of the root README. It drives headless Chrome
-through the whole shopping flow against the running storefront, then uses ffmpeg to write
-`docs/demo/cloudcart-demo.mp4` and `cloudcart-demo.gif`. It needs Google Chrome, ffmpeg, and a
-confirmed user in the target Cognito pool whose credentials are in `.env.demo` (gitignored):
+(in light mode) through the endless-aisle flow against the running storefront:
+1. choose Downtown as My store;
+2. buy a light that only Harbor stocks, plus a lens on Downtown's shelf, for pickup at Downtown;
+3. work the order through Downtown's staff queue.
+
+It then uses ffmpeg to write `docs/demo/cloudcart-demo.mp4` and `cloudcart-demo.gif`, and on the way
+saves the root README's four app screenshots to `docs/screenshots/`.
+
+It needs:
+- Google Chrome and ffmpeg;
+- a confirmed user in the target Cognito pool who is a member of `staff-northlight`, with
+  credentials in `.env.demo` (gitignored);
+- no other orders waiting in Downtown's pickup queue, so the take shows only its own.
 
 ```bash
 CLOUDCART_DEMO_EMAIL=demo@example.com
