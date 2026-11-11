@@ -101,3 +101,7 @@ output "locations_table_name" {
 output "stock_table_name" {
   value = module.app.stock_table_name
 }
+
+output "staff_group_names" {
+  value = module.app.staff_group_names
+}

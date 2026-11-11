@@ -102,6 +102,7 @@ module "cart_lambda" {
 
 locals {
   orders_user_index_name   = "tenantUser-createdAt-index"
+  orders_queue_index_name  = "tenantQueue-createdAt-index"
   permissions_boundary_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:policy/${var.project_name}-workload-boundary"
 }
 
@@ -118,6 +119,14 @@ module "orders_table" {
       hash_key        = "tenantUser" # "<tenantId>#<userId>": a shopper's order history at one store
       hash_key_type   = "S"
       range_key       = "createdAt" # ISO-8601 strings sort chronologically
+      range_key_type  = "S"
+      projection_type = "ALL"
+    },
+    {
+      name            = local.orders_queue_index_name
+      hash_key        = "tenantQueue" # "<tenantId>#<pickup store>" or "<tenantId>#SHIP": one staff work queue
+      hash_key_type   = "S"
+      range_key       = "createdAt" # oldest first is the order staff work through it
       range_key_type  = "S"
       projection_type = "ALL"
     }
@@ -301,6 +310,17 @@ module "auth" {
   user_pool_name            = "${var.project_name}-${var.environment}-users"
   enable_password_auth_flow = var.enable_password_auth_flow
   deletion_protection       = var.cognito_deletion_protection
+}
+
+# Staff of a business: membership of staff-<tenantId> lets a signed-in user work that tenant's
+# pickup and shipping queues and take in-store sales. The group arrives in the access token's
+# cognito:groups claim, and is checked against the request's tenant, so staff of one business
+# can't act on another's orders. Members are added by hand (admin-add-user-to-group).
+resource "aws_cognito_user_group" "staff" {
+  for_each     = local.tenants
+  name         = "staff-${each.key}"
+  user_pool_id = module.auth.user_pool_id
+  description  = "Staff of ${each.value.name}"
 }
 
 module "site" {

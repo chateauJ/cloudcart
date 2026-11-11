@@ -144,7 +144,8 @@ describe("CloudCart dev API", () => {
       body: { fulfillment: { type: "PICKUP", locationId: pick.storeId } },
     });
     expect(created.status).toBe(201);
-    expect(created.body).not.toHaveProperty("tenantLocation"); // an index key, never returned
+    expect(created.body).not.toHaveProperty("tenantQueue"); // an index key, never returned
+    expect(created.body.channel).toBe("ONLINE");
 
     const settled = await poll(
       () => api(config, "GET", `/orders/${created.body.orderId}`, { token }),

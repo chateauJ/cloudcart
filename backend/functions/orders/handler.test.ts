@@ -37,20 +37,22 @@ const cart = {
 const sticker = { productId: "prod_001", name: "Sticker", price: 0.1, inventory: 50 };
 const pin = { productId: "prod_002", name: "Pin", price: 0.2, inventory: 50 };
 
-// As stored: tenantUser keys the user index and is stripped from API responses
+// As stored: tenantUser and tenantQueue key indexes and are stripped from API responses
 const storedOrder = {
   tenantId: TENANT_ID,
   orderId: "order_1",
   userId: USER_ID,
   tenantUser: TENANT_USER,
+  tenantQueue: `${TENANT_ID}#SHIP`,
   status: "RESERVED",
   fulfillment: { type: "SHIP" },
+  channel: "ONLINE",
   total: 0.5,
   items: [],
   createdAt: CART_UPDATED_AT,
   updatedAt: CART_UPDATED_AT,
 };
-const { tenantUser: _indexKey, ...returnedOrder } = storedOrder;
+const { tenantUser: _userIndexKey, tenantQueue: _queueIndexKey, ...returnedOrder } = storedOrder;
 
 function givenCart(value: object | undefined) {
   ddb.on(GetCommand, { TableName: "carts-table" }).resolves({ Item: value });
@@ -239,7 +241,7 @@ describe("orders handler", () => {
   });
 
   describe("POST /orders fulfillment", () => {
-    it("records a pickup at one of the tenant's stores, keyed for that store's pickup queue", async () => {
+    it("records a pickup at one of the tenant's stores, queued at that store", async () => {
       givenLocation({ tenantId: TENANT_ID, locationId: "store_downtown", type: "STORE", pickupEnabled: true });
       givenCart(cart);
       givenProducts(sticker, pin);
@@ -248,7 +250,7 @@ describe("orders handler", () => {
 
       expect(res.statusCode).toBe(201);
       expect(res.body.fulfillment).toEqual({ type: "PICKUP", locationId: "store_downtown" });
-      expect(res.body).not.toHaveProperty("tenantLocation"); // an index key, not part of the API
+      expect(res.body).not.toHaveProperty("tenantQueue"); // an index key, not part of the API
       expect(ddb).toHaveReceivedCommandWith(GetCommand, {
         TableName: "locations-table",
         Key: { tenantId: TENANT_ID, locationId: "store_downtown" },
@@ -256,18 +258,19 @@ describe("orders handler", () => {
       const put = ddb.commandCalls(TransactWriteCommand)[0].args[0].input.TransactItems?.[0].Put;
       expect(put?.Item).toMatchObject({
         fulfillment: { type: "PICKUP", locationId: "store_downtown" },
-        tenantLocation: `${TENANT_ID}#store_downtown`,
+        tenantQueue: `${TENANT_ID}#store_downtown`,
+        channel: "ONLINE",
       });
     });
 
-    it("stores a shipment without a pickup-queue key", async () => {
+    it("queues a shipment in the tenant's shipping queue", async () => {
       givenCart(cart);
       givenProducts(sticker, pin);
 
       await createOrder(SHIP);
 
       const put = ddb.commandCalls(TransactWriteCommand)[0].args[0].input.TransactItems?.[0].Put;
-      expect(put?.Item).not.toHaveProperty("tenantLocation");
+      expect(put?.Item).toMatchObject({ tenantQueue: `${TENANT_ID}#SHIP`, channel: "ONLINE" });
       expect(ddb).not.toHaveReceivedCommandWith(GetCommand, { TableName: "locations-table" });
     });
 
