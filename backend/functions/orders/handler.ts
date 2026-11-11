@@ -9,12 +9,12 @@ import {
 import { TransactionCanceledException } from "@aws-sdk/client-dynamodb";
 import { docClient } from "../../shared/dynamodb";
 import { errorResponse, jsonResponse } from "../../shared/responses";
-import { getUserId } from "../../shared/auth";
+import { getUserId, isStaffOf } from "../../shared/auth";
 import { keys } from "../../shared/keys";
 import { createLogger, Logger } from "../../shared/logger";
 import { parseJsonBody } from "../../shared/request";
 import { resolveTenant } from "../../shared/tenant";
-import { Cart, Fulfillment, Location, Order, OrderLineItem, Product } from "../../shared/types";
+import { Cart, Fulfillment, Location, Order, OrderChannel, OrderLineItem, Product } from "../../shared/types";
 
 const ORDERS_TABLE_NAME = process.env.ORDERS_TABLE_NAME;
 const ORDERS_USER_INDEX_NAME = process.env.ORDERS_USER_INDEX_NAME;
@@ -106,6 +106,22 @@ async function createOrder(
       'Body must be { fulfillment: { type: "SHIP" } } or { fulfillment: { type: "PICKUP", locationId } }',
     );
   }
+  const sale = parseSale(body);
+  if (!sale) {
+    return errorResponse(400, "INVALID_REQUEST", 'channel must be "ONLINE", or "IN_STORE" with a placedAtLocationId');
+  }
+  if (sale.channel === "IN_STORE") {
+    // Only a business's own staff can ring up a sale at its counter
+    if (!isStaffOf(event, tenantId)) {
+      return errorResponse(400, "INVALID_CHANNEL", "Only store staff can place in-store orders");
+    }
+    const store = await docClient.send(
+      new GetCommand({ TableName: LOCATIONS_TABLE_NAME, Key: keys.location(tenantId, sale.placedAtLocationId!) }),
+    );
+    if ((store.Item as Location | undefined)?.type !== "STORE") {
+      return errorResponse(400, "INVALID_LOCATION", `${sale.placedAtLocationId} is not one of your stores`);
+    }
+  }
   if (fulfillment.type === "PICKUP") {
     const location = await docClient.send(
       new GetCommand({ TableName: LOCATIONS_TABLE_NAME, Key: keys.location(tenantId, fulfillment.locationId) }),
@@ -153,7 +169,8 @@ async function createOrder(
     status: "PENDING", // stock is allocated and reserved asynchronously by the inventory Lambda, not here
     fulfillment,
     tenantQueue: keys.tenantQueue(tenantId, fulfillment),
-    channel: "ONLINE",
+    channel: sale.channel,
+    ...(sale.placedAtLocationId && { placedAtLocationId: sale.placedAtLocationId }),
     total: calculateTotal(items),
     items,
     createdAt: now,
@@ -189,6 +206,7 @@ async function createOrder(
     total: order.total,
     lineCount: items.length,
     fulfillment: fulfillment.type,
+    channel: sale.channel,
   });
   return jsonResponse(201, publicOrder(order));
 }
@@ -231,6 +249,16 @@ function parseFulfillment(body: unknown): Fulfillment | null {
   if (type === "SHIP") return { type: "SHIP" };
   if (type === "PICKUP" && typeof locationId === "string" && /^[a-z0-9_-]{1,64}$/.test(locationId)) {
     return { type: "PICKUP", locationId };
+  }
+  return null;
+}
+
+// Who rang the sale up. Absent means the shopper checking out online; IN_STORE names the store.
+function parseSale(body: unknown): { channel: OrderChannel; placedAtLocationId?: string } | null {
+  const { channel, placedAtLocationId } = (body ?? {}) as Record<string, unknown>;
+  if (channel === undefined || channel === "ONLINE") return { channel: "ONLINE" };
+  if (channel === "IN_STORE" && typeof placedAtLocationId === "string" && /^[a-z0-9_-]{1,64}$/.test(placedAtLocationId)) {
+    return { channel: "IN_STORE", placedAtLocationId };
   }
   return null;
 }

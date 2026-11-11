@@ -88,8 +88,23 @@ export function removeFromCart(productId: string): Promise<Cart> {
   return request<Cart>("DELETE", `/cart/items/${encodeURIComponent(productId)}`, { auth: true });
 }
 
-export function createOrder(fulfillment: Fulfillment): Promise<Order> {
-  return request<Order>("POST", "/orders", { auth: true, body: { fulfillment } });
+// inStoreAt: staff ringing the sale up at a store's counter (the API checks they're staff)
+export function createOrder(fulfillment: Fulfillment, inStoreAt?: string): Promise<Order> {
+  const sale = inStoreAt ? { channel: "IN_STORE", placedAtLocationId: inStoreAt } : {};
+  return request<Order>("POST", "/orders", { auth: true, body: { fulfillment, ...sale } });
+}
+
+// Staff: a store's pickup queue (its location ID) or the shipping queue ("SHIP"), oldest first
+export function listStaffQueue(queue: string): Promise<Order[]> {
+  return request<Order[]>("GET", `/staff/orders?queue=${encodeURIComponent(queue)}`, { auth: true });
+}
+
+export function markReady(orderId: string): Promise<Order> {
+  return request<Order>("POST", `/staff/orders/${encodeURIComponent(orderId)}/ready`, { auth: true });
+}
+
+export function markFulfilled(orderId: string): Promise<Order> {
+  return request<Order>("POST", `/staff/orders/${encodeURIComponent(orderId)}/fulfill`, { auth: true });
 }
 
 export function listOrders(): Promise<Order[]> {
@@ -109,6 +124,7 @@ export async function getOrder(orderId: string): Promise<Order | null> {
 export function errorMessage(err: unknown, fallback = "Something went wrong"): string {
   if (err instanceof ApiError) {
     if (err.code === "CART_CONFLICT") return "Your cart changed in another tab - review it and try again.";
+    if (err.code === "INVALID_TRANSITION") return "Someone already moved this order - refresh the queue.";
     return err.message;
   }
   return err instanceof Error ? err.message : fallback;

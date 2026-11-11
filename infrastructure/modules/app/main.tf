@@ -174,6 +174,35 @@ module "orders_lambda" {
   ]
 }
 
+# The staff side of a business: pickup and shipping queues and moving orders through them.
+# It's the only function that can update an order's status from the API.
+module "staff_lambda" {
+  source                   = "../lambda"
+  function_name            = "${var.project_name}-${var.environment}-staff"
+  dist_dir                 = "${var.lambda_dist_dir}/staff"
+  permissions_boundary_arn = local.permissions_boundary_arn
+  environment_variables = {
+    ORDERS_TABLE_NAME       = module.orders_table.table_name
+    ORDERS_QUEUE_INDEX_NAME = local.orders_queue_index_name
+    LOCATIONS_TABLE_NAME    = module.locations_table.table_name
+    TENANTS_TABLE_NAME      = module.tenants_table.table_name
+  }
+  dynamodb_access = [
+    {
+      actions       = ["dynamodb:UpdateItem"] # conditional status moves only; never creates or deletes orders
+      resource_arns = [module.orders_table.table_arn]
+    },
+    {
+      actions       = ["dynamodb:Query"]
+      resource_arns = ["${module.orders_table.table_arn}/index/${local.orders_queue_index_name}"]
+    },
+    {
+      actions       = ["dynamodb:GetItem"]
+      resource_arns = [module.locations_table.table_arn, module.tenants_table.table_arn]
+    }
+  ]
+}
+
 module "order_queue" {
   source     = "../sqs"
   queue_name = "${var.project_name}-${var.environment}-order-queue"
@@ -346,6 +375,10 @@ module "api" {
       function_name = module.orders_lambda.function_name
       invoke_arn    = module.orders_lambda.invoke_arn
     }
+    staff = {
+      function_name = module.staff_lambda.function_name
+      invoke_arn    = module.staff_lambda.invoke_arn
+    }
   }
   routes = {
     "GET /tenant"             = { integration = "products" } # the storefront's name and tagline
@@ -358,6 +391,10 @@ module "api" {
     "POST /orders"            = { integration = "orders", authorization_required = true }
     "GET /orders"             = { integration = "orders", authorization_required = true }
     "GET /orders/{id}"        = { integration = "orders", authorization_required = true }
+    # Staff only: the Lambda checks the token's staff-<tenantId> group and answers anyone else 404
+    "GET /staff/orders"               = { integration = "staff", authorization_required = true } # ?queue=<store>|SHIP&status=
+    "POST /staff/orders/{id}/ready"   = { integration = "staff", authorization_required = true }
+    "POST /staff/orders/{id}/fulfill" = { integration = "staff", authorization_required = true }
   }
 
   jwt_authorizer = {
@@ -376,6 +413,7 @@ module "monitoring" {
     orders        = module.orders_lambda.function_name
     inventory     = module.inventory_lambda.function_name
     expiry        = module.expiry_lambda.function_name
+    staff         = module.staff_lambda.function_name
     notifications = module.notifications_lambda.function_name
   }
   api_id           = module.api.api_id

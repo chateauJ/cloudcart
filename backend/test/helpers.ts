@@ -24,10 +24,12 @@ interface ApiEventOptions {
   routeKey: string;
   tenantId?: string | null; // defaults to TENANT_ID; null sends no X-Tenant-Id header
   userId?: string; // omitted = no verified JWT, as if the authorizer were missing
+  groups?: string; // the cognito:groups claim as the JWT authorizer passes it, e.g. "[staff-northlight]"
   body?: unknown;
   rawBody?: string; // sent as-is, for malformed JSON
   base64?: boolean;
   pathParameters?: Record<string, string>;
+  queryStringParameters?: Record<string, string>;
 }
 
 export function apiEvent(options: ApiEventOptions): APIGatewayProxyEventV2 {
@@ -36,10 +38,18 @@ export function apiEvent(options: ApiEventOptions): APIGatewayProxyEventV2 {
     routeKey: options.routeKey,
     headers: options.tenantId === null ? {} : { "x-tenant-id": options.tenantId ?? TENANT_ID },
     pathParameters: options.pathParameters,
+    queryStringParameters: options.queryStringParameters,
     body: text !== undefined && options.base64 ? Buffer.from(text).toString("base64") : text,
     isBase64Encoded: options.base64 ?? false,
     requestContext: {
-      authorizer: options.userId ? { jwt: { claims: { sub: options.userId }, scopes: [] } } : undefined,
+      authorizer: options.userId
+        ? {
+            jwt: {
+              claims: { sub: options.userId, ...(options.groups !== undefined && { "cognito:groups": options.groups }) },
+              scopes: [],
+            },
+          }
+        : undefined,
     },
   } as unknown as APIGatewayProxyEventV2;
 }

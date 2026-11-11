@@ -26,6 +26,7 @@ A serverless, event-driven e-commerce backend on AWS. Every resource is defined 
 | API served through CloudFront at `/api`, catalog cached per store at the edge; AWS Budgets alert | Done |
 | Endless aisle: stores and a warehouse per business, stock per location, warehouse-first allocation | Done |
 | Pickup or ship at checkout, transfers between locations, pickup holds that expire on time (EventBridge Scheduler) | Done |
+| Staff per business: pickup and shipping queues, ready and picked-up steps, in-store sales | Done |
 
 ## Architecture
 
@@ -39,6 +40,7 @@ flowchart LR
     products --> st[(locations + stock)]
     api --> cart[cart λ] --> ct[(carts)]
     api --> orders[orders λ] --> ot[(orders)]
+    api --> staff[staff λ] -->|queues, ready, fulfilled| ot
     ot -->|DynamoDB Stream, INSERT only| pipe[EventBridge Pipe]
     pipe -->|OrderCreated| bus[EventBridge bus]
     bus --> sqs[SQS order queue] --> inventory[inventory λ]
@@ -110,6 +112,7 @@ The API answers checkout before stock is reserved, so a slow or failing inventor
 - **Stock per location, for endless aisle.** Each business has stores and a warehouse (`locations`), and stock is one row per product per location (`stock`, keyed `<productId>#<locationId>`), not a count on the product. A shopper sees what's at their chosen store and what the business holds everywhere else, and can buy either. The inventory Lambda fills each order line from one location: the warehouse first, so store shelves stay stocked for walk-in customers, then a store. If another order takes the stock between the read and the write, the transaction's condition fails and the Lambda re-reads and re-allocates, up to three times. The order records where each line came from.
 - **Pickup holds that expire on time.** A pickup order's stock is held until `holdExpiresAt` (10 minutes in dev, so it can be demoed; 48 hours in prod). The inventory Lambda creates a one-time EventBridge Scheduler schedule for the deadline *before* it reserves the stock, so a reservation can't exist without its expiry, and the schedule deletes itself after it runs. At the deadline the expiry Lambda returns each line's stock to the location it came from and marks the order `EXPIRED`, in one transaction conditional on the order still being held, so a duplicate or late run changes nothing. DynamoDB TTL was the alternative, but its deletes can lag by days.
 - **Pickup at any store, from any location.** For a pickup, each line comes from the pickup store's own shelf if it can, then the warehouse, then another store, and lines that come from elsewhere are flagged `needsTransfer`. That's the endless aisle: a shopper can collect at their local store something it doesn't stock.
+- **Staff, scoped to one business.** A business's staff are the members of its Cognito group `staff-<tenantId>`, which arrives in the access token's `cognito:groups` claim. The staff Lambda checks it against the request's tenant, so being staff at one business grants nothing at another, and anyone else gets the same 404 as a route that doesn't exist. Staff work two kinds of queue from one index on the orders table (`tenantQueue`): each store's pickups, and the business's shipments. Each step (ready, then picked up or shipped) is one conditional update, so two people pressing the button at once can't both succeed. Staff can also ring up an in-store sale (`channel: "IN_STORE"`) to collect at any store or ship, which is how a shop sells stock it doesn't have on its own shelves.
 - **Pool multi-tenancy.** One deployment serves many businesses. Every table's partition key is `tenantId`, every request names its store with `X-Tenant-Id` (checked against a `tenants` table), and every DynamoDB key is built by one helper that takes the tenant first, so no handler can address another store's data by ID alone. A shopper's single Cognito account works at every store, with a separate cart and order history at each. Listing a catalog is a `Query` on the tenant's partition rather than a `Scan` of the table.
 - **Catalog caching at the edge, not in a cache cluster.** `GET /tenant`, `/products` and `/products/{id}` are cached at CloudFront for 30 seconds, with `X-Tenant-Id` in the cache key so each store is cached separately; a test proves one store's cached catalog is never served to another. Catalog reads are public, read-heavy and fine to be seconds stale, so this replaces DAX or ElastiCache at no cost. Every other route is never cached and is keyed on `Authorization`, because CloudFront strips that header from GET requests unless it's in the cache key. Stock is still enforced at checkout by the conditional write, so a stale catalog can't oversell.
 - **Separate directories per environment, not workspaces.** Each environment is its own root module and state file, so applying to the wrong one takes an explicit `cd`. Both call the same `modules/app`, and they differ only in a handful of arguments.
@@ -142,11 +145,14 @@ The hosted storefront calls the API at `<site_url>/api` (for example `/api/produ
 | GET | `/cart` | JWT | cart |
 | POST | `/cart/items` — `{ productId, quantity }` | JWT | cart |
 | DELETE | `/cart/items/{productId}` | JWT | cart |
-| POST | `/orders` — checks out the caller's cart; body `{ fulfillment: { type: "SHIP" } }` or `{ fulfillment: { type: "PICKUP", locationId } }` | JWT | orders |
+| POST | `/orders` — checks out the caller's cart; body `{ fulfillment: { type: "SHIP" } }` or `{ fulfillment: { type: "PICKUP", locationId } }`, plus `channel: "IN_STORE", placedAtLocationId` for a staff sale | JWT | orders |
 | GET | `/orders` — caller's orders, newest first | JWT | orders |
 | GET | `/orders/{id}` | JWT | orders |
+| GET | `/staff/orders?queue=<store>\|SHIP&status=` — a work queue, oldest first | JWT, staff | staff |
+| POST | `/staff/orders/{id}/ready` — a pickup is on the counter | JWT, staff | staff |
+| POST | `/staff/orders/{id}/fulfill` — picked up, or shipped | JWT, staff | staff |
 
-New orders return `status: "PENDING"`. Once the inventory Lambda processes the event they move to `RESERVED`, with each line's `sourceLocationId` (and `needsTransfer` for a pickup) and a pickup's `holdExpiresAt`, or to `FAILED` when no location can fill a line. A pickup that isn't collected by its deadline becomes `EXPIRED` and its stock goes back on sale.
+New orders return `status: "PENDING"`. Once the inventory Lambda processes the event they move to `RESERVED`, with each line's `sourceLocationId` (and `needsTransfer` for a pickup) and a pickup's `holdExpiresAt`, or to `FAILED` when no location can fill a line. Staff then move a pickup to `READY_FOR_PICKUP` and `FULFILLED`, or a shipment straight to `FULFILLED`. A pickup that isn't collected by its deadline becomes `EXPIRED` and its stock goes back on sale.
 
 Errors share one shape:
 
@@ -223,7 +229,7 @@ npm test
 npm run test:coverage
 ```
 
-The integration suite runs the full golden path against a deployed environment: sign in, list products, add to cart, check out, poll until the order is reserved, then check that the stock came from the warehouse and went down there. A pickup order at a store that lacks the product must come back reserved with the line flagged for transfer and a hold deadline. It also checks tenant isolation between the two seeded stores (`northlight` and `tidewater`): each has its own catalog where product IDs overlap, its own cart for the same shopper, and can't see the other's orders. With `CLOUDCART_SITE_URL` set (the `site_url` output), it also checks the CloudFront `/api` path: a repeat catalog request is a cache hit, each store is cached separately, signed-in requests carry their token and are never cached, and API errors arrive as JSON. It needs a confirmed Cognito test user.
+The integration suite runs the full golden path against a deployed environment: sign in, list products, add to cart, check out, poll until the order is reserved, then check that the stock came from the warehouse and went down there. A pickup order at a store that lacks the product must come back reserved with the line flagged for transfer and a hold deadline. The staff suite works a pickup through its store's queue (ready, a refused second press, picked up), ships an in-store sale from the shipping queue, and checks that the staff API stays hidden at a business the user isn't staff of. The test user must be in `staff-northlight`: It also checks tenant isolation between the two seeded stores (`northlight` and `tidewater`): each has its own catalog where product IDs overlap, its own cart for the same shopper, and can't see the other's orders. With `CLOUDCART_SITE_URL` set (the `site_url` output), it also checks the CloudFront `/api` path: a repeat catalog request is a cache hit, each store is cached separately, signed-in requests carry their token and are never cached, and API errors arrive as JSON. It needs a confirmed Cognito test user.
 
 ```bash
 cd backend
@@ -232,6 +238,7 @@ export CLOUDCART_COGNITO_CLIENT_ID=$(terraform -chdir=../infrastructure/environm
 export CLOUDCART_SITE_URL=$(terraform -chdir=../infrastructure/environments/dev output -raw site_url)
 export CLOUDCART_TEST_USERNAME=you@example.com
 export CLOUDCART_TEST_PASSWORD='your-test-password'
+aws cognito-idp admin-add-user-to-group --user-pool-id "$(terraform -chdir=../infrastructure/environments/dev output -raw cognito_user_pool_id)" --username "$CLOUDCART_TEST_USERNAME" --group-name staff-northlight --region us-east-1
 npm run test:integration
 ```
 

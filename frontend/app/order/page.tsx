@@ -102,6 +102,11 @@ function OrderDetail() {
         Placed {new Date(order.createdAt).toLocaleString()}
       </p>
 
+      {order.channel === "IN_STORE" && (
+        <p className="mt-1 text-sm text-foreground/50">
+          Sold in store at {locationById(order.placedAtLocationId ?? "")?.name ?? order.placedAtLocationId}
+        </p>
+      )}
       <p className="mt-3 text-sm">
         {pickupStore ? (
           <>
@@ -132,6 +137,12 @@ function OrderDetail() {
       {order.status === "READY_FOR_PICKUP" && (
         <p className="mt-4 rounded-md bg-green-50 px-3 py-2 text-sm text-green-800">
           Ready at the {pickupStore?.name ?? "store"} counter until {holdDeadline}.
+        </p>
+      )}
+      {order.status === "FULFILLED" && (
+        <p className="mt-4 rounded-md bg-green-50 px-3 py-2 text-sm text-green-800">
+          {pickupStore ? "Collected" : "Shipped"}
+          {order.fulfilledAt && ` ${new Date(order.fulfilledAt).toLocaleString()}`}. Thank you!
         </p>
       )}
       {order.status === "EXPIRED" && (

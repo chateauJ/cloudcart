@@ -10,3 +10,23 @@ export function getUserId(event: APIGatewayProxyEventV2): string | null {
   const sub = claims?.sub;
   return typeof sub === "string" && sub !== "" ? sub : null;
 }
+
+// Cognito groups from the verified access token. The HTTP API's JWT authorizer flattens array
+// claims to a string like "[staff-northlight staff-tidewater]", so both that and a real array are read.
+export function getGroups(event: APIGatewayProxyEventV2): string[] {
+  const claims = (event as APIGatewayProxyEventV2WithJWTAuthorizer).requestContext.authorizer?.jwt
+    ?.claims;
+  const raw: unknown = claims?.["cognito:groups"];
+  if (Array.isArray(raw)) return raw.filter((group): group is string => typeof group === "string");
+  if (typeof raw !== "string") return [];
+  return raw
+    .replace(/^\[|\]$/g, "")
+    .split(/[\s,]+/)
+    .filter((group) => group !== "");
+}
+
+// Staff membership is per business: staff-<tenantId>. Checked against the tenant the request is
+// for, so being staff somewhere never grants access to another tenant's orders.
+export function isStaffOf(event: APIGatewayProxyEventV2, tenantId: string): boolean {
+  return getGroups(event).includes(`staff-${tenantId}`);
+}

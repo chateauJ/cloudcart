@@ -47,6 +47,11 @@ export default function Navbar() {
               <Link href="/orders" className={linkClass("/orders")}>
                 Orders
               </Link>
+              {user.isStaff && (
+                <Link href="/staff" className={linkClass("/staff")}>
+                  Staff
+                </Link>
+              )}
             </>
           )}
 

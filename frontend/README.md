@@ -75,6 +75,7 @@ Before recording, it empties that user's cart off camera, so every take starts t
 | `lib/CatalogContext.tsx` | Product names and prices for the cart, checkout and order pages |
 | `lib/TenantContext.tsx` | The store's name and tagline, for the navbar and catalog header |
 | `lib/StoreContext.tsx` | The business's locations and the shopper's "My store" choice |
+| `app/staff/page.tsx` | Staff only (members of `staff-<tenantId>`): a store's pickup queue or the shipping queue, with Mark ready, Mark picked up and Mark shipped. Staff also see an "In-store sale" option at checkout |
 | `lib/stock.ts` | Totals, per-location quantities and the per-line maximum from a product's stock |
 
 New orders start as `PENDING`. The order page polls until the asynchronous inventory flow (DynamoDB

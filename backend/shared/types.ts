@@ -79,6 +79,11 @@ export interface Order {
   fulfillment: Fulfillment;
   tenantQueue: string; // the staff work queue it's in: "<tenantId>#<pickup locationId>", or "<tenantId>#SHIP"
   channel: OrderChannel;
+  placedAtLocationId?: string; // IN_STORE only: the store whose counter took the sale
+  readyAt?: string;
+  readyBy?: string; // staff user ID
+  fulfilledAt?: string;
+  fulfilledBy?: string; // staff user ID
   holdExpiresAt?: string; // PICKUP only, set when RESERVED: when unclaimed stock goes back on sale
   total: number;
   items: OrderLineItem[];

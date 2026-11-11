@@ -18,6 +18,8 @@ export default function CheckoutPage() {
   const router = useRouter();
   // null until the shopper picks; until then, pickup at their store if they have one, else shipping
   const [choice, setChoice] = useState<Fulfillment | null>(null);
+  // Staff only: the store whose counter is ringing this sale up (null = the staff member's own online order)
+  const [inStoreAt, setInStoreAt] = useState<string | null>(null);
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -40,7 +42,7 @@ export default function CheckoutPage() {
     setError(null);
     setIsPlacingOrder(true);
     try {
-      const order = await api.createOrder(fulfillment);
+      const order = await api.createOrder(fulfillment, inStoreAt ?? undefined);
       await refresh(); // the API cleared the cart in the same transaction that created the order
       router.push(`/order?id=${encodeURIComponent(order.orderId)}`);
     } catch (err) {
@@ -99,6 +101,30 @@ export default function CheckoutPage() {
           <span className="flex-1">Ship to me</span>
         </label>
       </fieldset>
+
+      {user.isStaff && stores.length > 0 && (
+        <label className="mt-4 flex items-center gap-3 rounded-lg border border-dashed border-foreground/20 px-4 py-3 text-sm">
+          <input
+            type="checkbox"
+            checked={inStoreAt !== null}
+            onChange={(e) => setInStoreAt(e.target.checked ? (myStore?.locationId ?? stores[0].locationId) : null)}
+          />
+          <span className="flex-1">In-store sale (staff)</span>
+          {inStoreAt !== null && (
+            <select
+              value={inStoreAt}
+              onChange={(e) => setInStoreAt(e.target.value)}
+              className="rounded-md border border-foreground/15 bg-background px-2 py-1 text-sm"
+            >
+              {stores.map((store) => (
+                <option key={store.locationId} value={store.locationId}>
+                  at {store.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </label>
+      )}
 
       <div className="mt-6 divide-y divide-foreground/10 rounded-lg border border-foreground/10">
         {lines.map(({ item, product }) => {
