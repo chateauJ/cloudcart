@@ -1,32 +1,43 @@
 # CloudCart
 
-A serverless, event-driven e-commerce backend on AWS. Every resource is defined in Terraform and shipped through GitHub Actions. The backend and infrastructure are the core of the project; the Next.js storefront is a thin demo client.
+**Endless-aisle commerce for physical retailers, serverless on AWS.** A shop's stock, spread across its stores and a warehouse, becomes sellable from anywhere: online, for pickup at any store, or across the counter by staff. One deployment serves many businesses. Every resource is defined in Terraform and shipped through GitHub Actions, with an approval-gated path to production.
 
-![CloudCart demo: browse the catalog, sign in, add to cart, check out, and watch the order go from PENDING to COMPLETE](docs/demo/cloudcart-demo.gif)
+> A website builder gives a business a website that contains a store. CloudCart makes a physical store's stock sellable from anywhere.
 
-*A real session against the dev environment, recorded by [`frontend/scripts/record-demo.mjs`](frontend/scripts/record-demo.mjs). The order shows `PENDING` and turns `COMPLETE` a few seconds later, once the inventory Lambda has reserved stock through the async [order path](#architecture). [Full-resolution MP4](docs/demo/cloudcart-demo.mp4).*
+![CloudCart demo: a shopper whose store is Downtown buys a light that only the Harbor store stocks, picks it up at Downtown, and staff work the order through Downtown's pickup queue](docs/demo/cloudcart-demo.gif)
 
-## Status
+*A real session against the dev environment, recorded by [`frontend/scripts/record-demo.mjs`](frontend/scripts/record-demo.mjs). The shopper's store is Downtown, but the light they want is only at Harbor. They order it for pickup at Downtown. The inventory Lambda takes it from Harbor and flags it for transfer, takes the lens from Downtown's own shelf, and holds both until the pickup deadline. Staff then mark the order ready and picked up from Downtown's queue. [Full-resolution MP4](docs/demo/cloudcart-demo.mp4).*
 
-| Area | State |
-| --- | --- |
-| Products, Cart and Orders APIs (HTTP API + Lambda + DynamoDB) | Done |
-| Cognito sign-up/sign-in and JWT authorization on protected routes | Done |
-| Async order processing (DynamoDB Streams → EventBridge Pipe → SQS/SNS) | Done |
-| Observability (CloudWatch alarms, dashboard, saved Logs Insights queries, X-Ray) | Done |
-| Least-privilege IAM review and CI permissions boundary | Done |
-| Unit tests (77 Jest tests, coverage floor enforced in CI) | Done |
-| Integration test suite against the deployed API | Done |
-| CI on pull requests, deploy to dev on merge to `main` | Done |
-| Shared `app` module wiring each environment | Done |
-| prod environment and the approval-gated prod stages of the deploy pipeline | Done |
-| Frontend wired to the real API and Cognito, with a seeded 12-product catalog | Done |
-| Static storefront on S3 + CloudFront, deployed by the pipeline | Done |
-| Multi-tenancy: every table partitioned by tenant, two seeded stores | Done |
-| API served through CloudFront at `/api`, catalog cached per store at the edge; AWS Budgets alert | Done |
-| Endless aisle: stores and a warehouse per business, stock per location, warehouse-first allocation | Done |
-| Pickup or ship at checkout, transfers between locations, pickup holds that expire on time (EventBridge Scheduler) | Done |
-| Staff per business: pickup and shipping queues, ready and picked-up steps, in-store sales | Done |
+## Why not a website builder?
+
+A website builder such as Wix answers *"How do I get my business online?"* It starts from pages and a theme, and its store is a catalog of products with a stock count, sold to whoever visits the site. That's the right tool for a business that mostly sells online, or from one place.
+
+CloudCart answers a different question: *"How do I sell the stock already sitting in my shops?"* It starts from the inventory, where each unit physically is, and builds the selling around that:
+
+| | Website builder | CloudCart |
+| --- | --- | --- |
+| Starting point | A website, with a store section | A business's locations and the stock in each |
+| Unit of stock | A count per product (multi-location stock, where offered, is usually a higher tier or an add-on) | A quantity per product **per location**, the only stock record there is |
+| What a shopper sees | In stock or not | What's on *their* store's shelf, and what the business holds elsewhere |
+| Where an order is filled from | Wherever the merchant ships from | Chosen per line by an allocation rule: the pickup store's shelf, then the warehouse, then another store, with a transfer flagged |
+| Store pickup | A pickup option | A **hold** with a deadline, released automatically and returned to the shelf it came from if nobody collects |
+| Store staff | Admin users of the website | A per-business staff role with pickup and shipping queues, and in-store sales of stock that isn't on their shelf |
+| Shape | One site per merchant | One multi-tenant platform; each business is a tenant, isolated in every table key |
+
+So CloudCart isn't a better website builder; it's the inventory and fulfilment layer that a multi-store retailer would otherwise stitch together from a website, a POS and spreadsheets. The storefront here is deliberately thin. The interesting part is the backend.
+
+## The endless aisle, end to end
+
+The demo above, step by step, with what each step exercises:
+
+1. **A shopper picks their store.** They choose *Downtown* as their store. The catalog (`GET /products`, cached per business at CloudFront for 30 seconds) switches to what's on Downtown's shelf ("3 at Downtown"), and shows "Not at Downtown · 6 elsewhere" for the LumaRing light.
+2. **They see where it is.** The product page lists every location's stock from the `stock` table: Downtown none, Harbor 6, the warehouse none.
+3. **They order it for pickup at Downtown, along with a lens that is on Downtown's shelf.** Checkout previews which lines are on the shelf and which need a transfer. `POST /orders` writes the order `PENDING` and clears the cart in one transaction, and answers at once.
+4. **The stock is allocated asynchronously.** The order's stream record becomes an `OrderCreated` event (DynamoDB Streams → EventBridge Pipe → EventBridge → SQS). The inventory Lambda takes the lens from Downtown and the light from Harbor (`needsTransfer: true`), schedules the hold's expiry with EventBridge Scheduler, then decrements both stock rows and marks the order `RESERVED` in one conditional transaction.
+5. **Staff move it through the counter.** Downtown's staff (members of the `staff-northlight` Cognito group) see the order in their pickup queue, with the light marked "Transfer from Harbor". They mark it ready, then picked up; each press is one conditional update, so a double press can't skip a step.
+6. **If the shopper never comes,** the schedule fires at the deadline (48 hours in prod), and the expiry Lambda puts the light back at Harbor and the lens back at Downtown, then marks the order `EXPIRED`.
+
+Staff can also sell the endless aisle from behind the counter: an in-store sale (`channel: "IN_STORE"`) of something the shop doesn't have, shipped from the warehouse or collected at another store.
 
 ## Architecture
 
@@ -83,11 +94,30 @@ sequenceDiagram
 
 The API answers checkout before stock is reserved, so a slow or failing inventory step never blocks the customer. If no location can fill a line, the inventory Lambda marks the order `FAILED` with a reason instead.
 
+**Order lifecycle.** Every arrow is a conditional write, so a duplicate or late event can't move an order twice.
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING: POST /orders
+    PENDING --> RESERVED: inventory λ allocates stock
+    PENDING --> FAILED: no location can fill a line
+    RESERVED --> READY_FOR_PICKUP: staff, pickup
+    RESERVED --> FULFILLED: staff, shipment
+    READY_FOR_PICKUP --> FULFILLED: staff, picked up
+    RESERVED --> EXPIRED: hold deadline (pickup)
+    READY_FOR_PICKUP --> EXPIRED: hold deadline
+    EXPIRED --> [*]: stock returned to its locations
+```
+
 ### Screenshots
 
-| Product catalog (12 products, seeded by Terraform) | Product page |
+| Catalog with "My store" set to Downtown | Product page: stock at every location |
 | --- | --- |
-| ![Product grid](docs/screenshots/products.png) | ![Product page](docs/screenshots/product-detail.png) |
+| ![Product grid showing what is on the Downtown shelf](docs/screenshots/products.png) | ![Product page listing Downtown none, Harbor 6, warehouse none](docs/screenshots/product-detail.png) |
+
+| Checkout: pickup at Downtown, with a transfer preview | Staff: Downtown's pickup queue |
+| --- | --- |
+| ![Checkout with pickup at Downtown; one line on the shelf, one transferred](docs/screenshots/checkout.png) | ![Staff pickup queue with the order, one line flagged Transfer from Harbor](docs/screenshots/staff-queue.png) |
 
 ### Behind the scenes
 
@@ -101,7 +131,7 @@ The API answers checkout before stock is reserved, so a slow or failing inventor
 
 **X-Ray trace map.** Each Lambda and the DynamoDB tables it calls, drawn from the traces of the same session.
 
-<img src="docs/screenshots/xray-trace-map.png" alt="X-Ray trace map: the cart, orders, products, inventory and notifications Lambdas and the DynamoDB tables they call" width="560">
+<img src="docs/screenshots/xray-trace-map.png" alt="X-Ray trace map: the products, cart, orders, staff, inventory and notifications Lambdas and the DynamoDB tables they call" width="560">
 
 ### Key design decisions
 
@@ -124,8 +154,8 @@ The API answers checkout before stock is reserved, so a slow or failing inventor
 | Compute | AWS Lambda, Node.js 24, ARM64 (Graviton), bundled with esbuild |
 | API | API Gateway HTTP API (v2), native JWT authorizer, behind CloudFront |
 | Auth | Amazon Cognito User Pool + public app client |
-| Data | DynamoDB on-demand: `tenants`, `locations`, `products`, `stock`, `carts`, `orders` + `tenantUser-createdAt-index` GSI |
-| Events | DynamoDB Streams, EventBridge Pipes, EventBridge custom bus, SQS + DLQ, SNS |
+| Data | DynamoDB on-demand: `tenants`, `locations`, `products`, `stock`, `carts`, `orders`, with `tenantUser` (order history) and `tenantQueue` (staff queues) GSIs |
+| Events | DynamoDB Streams, EventBridge Pipes, EventBridge custom bus, SQS + DLQ, SNS, EventBridge Scheduler (pickup holds) |
 | Observability | CloudWatch Logs (structured JSON), alarms, dashboard, Logs Insights queries, X-Ray |
 | IaC | Terraform 1.14, AWS provider 6.x, S3 remote state with DynamoDB locking, tflint |
 | CI/CD | GitHub Actions, GitHub OIDC → IAM role (no stored AWS keys) |
@@ -164,9 +194,9 @@ Errors share one shape:
 
 ```text
 backend/
-  functions/<name>/handler.ts   # products, cart, orders, inventory, notifications (+ handler.test.ts)
-  shared/                       # auth, DynamoDB client, logger, request parsing, responses
-  integration/                  # golden-path suite against a deployed environment
+  functions/<name>/handler.ts   # products, cart, orders, inventory, expiry, staff, notifications (+ handler.test.ts)
+  shared/                       # auth and staff groups, tenant resolution, key builders, DynamoDB client, logger, responses
+  integration/                  # golden path, staff and CloudFront edge suites against a deployed environment
 infrastructure/
   bootstrap/                    # one-time: state bucket, lock table, GitHub OIDC provider, deploy role, boundary, budget
   modules/
@@ -219,7 +249,7 @@ terraform init
 terraform apply
 ```
 
-`local.auto.tfvars` is gitignored. Confirm the SNS subscription email to receive alarms. `terraform output api_endpoint` prints the API URL, and products are seeded by Terraform.
+`local.auto.tfvars` is gitignored. Confirm the SNS subscription email to receive alarms. `terraform output api_endpoint` prints the API URL. Terraform seeds two businesses (`northlight` and `tidewater`), their locations, products and stock.
 
 ### 3. Run the tests
 
@@ -229,7 +259,12 @@ npm test
 npm run test:coverage
 ```
 
-The integration suite runs the full golden path against a deployed environment: sign in, list products, add to cart, check out, poll until the order is reserved, then check that the stock came from the warehouse and went down there. A pickup order at a store that lacks the product must come back reserved with the line flagged for transfer and a hold deadline. The staff suite works a pickup through its store's queue (ready, a refused second press, picked up), ships an in-store sale from the shipping queue, and checks that the staff API stays hidden at a business the user isn't staff of. The test user must be in `staff-northlight`: It also checks tenant isolation between the two seeded stores (`northlight` and `tidewater`): each has its own catalog where product IDs overlap, its own cart for the same shopper, and can't see the other's orders. With `CLOUDCART_SITE_URL` set (the `site_url` output), it also checks the CloudFront `/api` path: a repeat catalog request is a cache hit, each store is cached separately, signed-in requests carry their token and are never cached, and API errors arrive as JSON. It needs a confirmed Cognito test user.
+The integration suites run against a deployed environment as a confirmed Cognito test user who is a member of `staff-northlight`:
+
+- **Golden path:** sign in, add to cart, check out for shipping, poll until the order is reserved, and check that the stock came from the warehouse and went down there. A pickup at a store that lacks the product must come back reserved, with the line flagged for transfer and a hold deadline.
+- **Tenant isolation** between the two seeded businesses: each has its own catalog where product IDs overlap, its own cart for the same shopper and its own locations, and neither can see the other's orders.
+- **Staff:** a pickup worked through its store's queue (ready, a refused second press, picked up), an in-store sale shipped from the shipping queue, and the staff API staying hidden at a business the user isn't staff of.
+- **Edge** (with `CLOUDCART_SITE_URL`, the `site_url` output): through CloudFront's `/api`, a repeat catalog request is a cache hit, each business is cached separately, signed-in requests carry their token and are never cached, and API errors arrive as JSON.
 
 ```bash
 cd backend
@@ -287,7 +322,7 @@ Deploys queue rather than cancel, because interrupting `terraform apply` can lea
 - **No static AWS credentials.** GitHub Actions gets short-lived credentials through OIDC. The deploy role trusts only `main`-branch jobs and the `dev`/`prod` environment jobs, so pull requests never receive AWS credentials.
 - **No privilege escalation from CI.** The deploy role can create IAM roles only if they carry the `cloudcart-workload-boundary` permissions boundary. It also can't detach or edit that boundary.
 - **Least-privilege Lambda roles.** Each function gets only the DynamoDB actions it uses, on its own tables, and log permissions on its own log group. For example, the orders role has no EventBridge access, and the cart role can only read `products`.
-- **Identity from the token.** Cart and order operations take the user ID from the verified JWT, never from the request.
+- **Identity from the token.** Cart and order operations take the user ID from the verified JWT, never from the request. Staff rights come from the token's `cognito:groups` claim and are checked against the request's business on every staff call.
 - **Private storefront bucket.** The site bucket blocks all public access. CloudFront reads it through Origin Access Control, and the bucket policy admits only that one distribution. CloudFront adds standard security headers (HSTS, `nosniff`, frame and referrer policies) to pages and API responses, and AWS Shield Standard DDoS protection to both.
 - **Cost alarm.** An account-wide AWS Budgets alert (in `bootstrap/`) emails at 80% of a $10 monthly limit and when the month is forecast to pass it. With no WAF, it's the backstop against a flood of valid requests that throttling alone wouldn't make free.
 - **Pinned Actions.** Third-party Actions are pinned to commit SHAs, and checkout doesn't persist credentials.
@@ -308,7 +343,7 @@ Alarms publish to a `cloudcart-<env>-ops-alerts` SNS topic, which is separate fr
 | Pipe `ExecutionFailed` | Orders are being written but their events aren't being published |
 | Rule `FailedInvocations` | EventBridge couldn't deliver to SQS or SNS |
 
-A CloudWatch dashboard (`terraform output dashboard_url`) charts these metrics plus DynamoDB consumed capacity. There are four saved Logs Insights queries: `errors`, `order-timeline`, `inventory-outcomes` and `lambda-performance`. Every Lambda writes one JSON object per log line with `requestId`, `traceId` and `coldStart`, plus `userId` and `orderId` where they're known, so one Logs Insights query can follow an order across three functions. X-Ray active tracing is on for every Lambda, and the DynamoDB client is instrumented so each table call appears as its own subsegment.
+A CloudWatch dashboard (`terraform output dashboard_url`) charts these metrics plus DynamoDB consumed capacity. There are four saved Logs Insights queries: `errors`, `order-timeline`, `inventory-outcomes` and `lambda-performance`. Every Lambda writes one JSON object per log line with `requestId`, `traceId` and `coldStart`, plus `userId` and `orderId` where they're known, so one Logs Insights query can follow an order across the functions that touch it. X-Ray active tracing is on for every Lambda, and the DynamoDB client is instrumented so each table call appears as its own subsegment.
 
 ## Cost
 
@@ -319,9 +354,24 @@ Nothing in the design bills while it sits idle:
 - HTTP API instead of REST API: about 70% cheaper per request, with a free native JWT authorizer.
 - No VPC, so no NAT gateway. Every service is reached through its public AWS endpoint.
 - A static storefront on S3 + CloudFront instead of a server: CloudFront's always-free tier covers 1 TB and 10 million requests a month.
+- Pickup holds expire through one-time EventBridge Scheduler schedules, whose free tier covers 14 million invocations a month, instead of a process polling for expired holds.
 - Catalog caching at CloudFront instead of DAX or ElastiCache, which bill per node-hour even when idle. Cached catalog requests never reach API Gateway or Lambda.
 - No provisioned concurrency or custom domain.
 
-## Out of scope
+## Production hardening I deliberately left out
 
-The design deliberately leaves out payments, multi-region deployment and DR, WAF and custom throttling, and a custom domain (which would also let the API's default endpoint be closed, so all traffic passes through CloudFront).
+This is an interview project built to production standards, not a running business, so a few things that cost money every month, or need a real business behind them, are documented here rather than built. Each one has a clear next step.
+
+| Left out | Why | What production would do |
+| --- | --- | --- |
+| **AWS WAF** | WAF bills a fixed monthly charge per web ACL and per rule, plus a fee per request: more than everything else here costs at demo traffic. | Attach a web ACL to the CloudFront distribution with the AWS managed core and known-bad-inputs rule groups and a rate-based rule per IP. Today the compensating controls are Shield Standard (free with CloudFront), the API stage's throttling, short edge caching of the public catalog, and the AWS Budgets alert. |
+| **Custom domain, and closing the API's default endpoint** | Needs a registered domain. Until there is one, the `execute-api` URL stays public for local development (CORS only restricts browsers). | A Route 53 domain with an ACM certificate on CloudFront, then `disable_execute_api_endpoint` on the HTTP API, so all traffic passes through CloudFront (and WAF). |
+| **Multi-region disaster recovery** | DynamoDB global tables resolve concurrent writes with last-writer-wins. Two regions could each decrement the same stock row and both succeed, overselling the last unit, which is exactly what the conditional writes here exist to prevent. | Keep each business's stock writes in one home region, replicate read-only to a standby, and fail over deliberately (Route 53 health checks plus a runbook) rather than run active-active. Recovery objectives would be agreed with the retailer first. |
+| **IAM-enforced tenant isolation** | Isolation is enforced in code today: every key is built by one helper that takes the tenant first, and integration tests prove it. | Per-request credentials scoped with `dynamodb:LeadingKeys` to the caller's `tenantId` (a token-vending role assumed with session tags), so even a bug in a handler couldn't read another business's partition. |
+| **One very large business** | Each business is one partition key per table, which DynamoDB serves up to about 1,000 writes and 3,000 reads a second. That's plenty for a small or medium retailer. | Shard a large tenant's key (`tenantId#n`) or give it its own tables (silo tier). |
+| **Tenant onboarding** | The two businesses are seeded by Terraform. | Self-service sign-up that creates the tenant, its locations and its staff group, plus per-business custom domains. |
+| **Payments** | Out of scope for the inventory and fulfilment problem this project is about. | Stripe Connect, so each business is paid directly, with the order moving to `RESERVED` only after payment authorises. |
+| **Shipping addresses and carriers** | Same. | An address on `SHIP` orders and a carrier integration for labels and tracking. |
+| **Real notifications** | The notifications Lambda logs what it would send. | SES email and SNS SMS: "ready for pickup", "your hold ends tomorrow". |
+| **POS integration** | Stock changes made at a till don't reach the `stock` table. | Sync from the retailer's POS through its webhooks into the same conditional stock writes. |
+| **Order changes** | No customer cancellation, and an order line is always filled from one location. | A cancel route that reuses the expiry Lambda's restock transaction, and line splitting across locations in the allocation rule. |
