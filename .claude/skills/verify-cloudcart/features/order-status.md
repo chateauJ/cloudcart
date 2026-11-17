@@ -1,0 +1,36 @@
+# Order status and holds
+
+`/order?id=<orderId>` shows the status badge, how the order is being fulfilled, the hold deadline for a pickup, and where each line came from. It polls every 1.5 s while the order is PENDING.
+
+## Sub-features
+
+- Statuses: PENDING → RESERVED → READY FOR PICKUP → FULFILLED; EXPIRED; FAILED.
+- Pickup orders show "Pick up at <store>" and "Held for you until <time>", plus a transfer note when a line needsTransfer.
+- Each line shows "From <location>", with "· transfer to <store>" for transferred lines.
+- FULFILLED shows "Collected …" for a pickup or "Shipped …" for a shipment. EXPIRED explains that the items went back on sale.
+- `/orders` lists the shopper's orders, newest first.
+
+## How to get to it (user POV)
+
+Placing an order lands here. Later, open Orders in the navbar and click an order.
+
+## Driving it with drive.mjs
+
+`pickup-collect` and `ship` wait here for RESERVED, then check the order row in DynamoDB:
+- `fulfillment`;
+- `items[0].sourceLocationId` and `needsTransfer`;
+- `holdExpiresAt` (pickup only);
+- the stock row at the source, which must be down by 1.
+
+They come back at the end for FULFILLED and Collected / Shipped.
+
+## Gotchas
+
+- **Hold expiry isn't journeyed**, because it takes `reservation_hold_minutes` (10 in dev). To prove it, place a pickup without collecting it, wait about 11 minutes, then check the order row reads `EXPIRED` and the source stock row is back up by the quantity:
+
+  ```sh
+  aws dynamodb get-item --table-name cloudcart-dev-orders --key '{"tenantId":{"S":"northlight"},"orderId":{"S":"ORDER_ID"}}' --query 'Item.status.S' --output text --region us-east-1
+  ```
+
+  The schedule deletes itself: `aws scheduler list-schedules --group-name cloudcart-dev-holds --region us-east-1`.
+- If an order stays PENDING, the async path is stuck. Check the order queue, the DLQ, and the inventory Lambda's logs.

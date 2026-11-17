@@ -27,3 +27,5 @@ CLAUDE.md
 
 # Per-developer Terraform values (e.g. alert email), auto-loaded but never committed
 local.auto.tfvars
+# verify-cloudcart skill: preview pid and proof artifacts (screenshots, logs), never committed
+.verify/
