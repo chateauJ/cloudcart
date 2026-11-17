@@ -118,12 +118,16 @@ async function typeInto(selector, text) {
   await evaluate(`document.querySelector(${JSON.stringify(selector)}).focus()`);
   await cdp.send("Input.insertText", { text });
 }
-// React reads a <select> change from the native value setter plus a bubbling change event
-const select = (selector, value) => evaluate(`(() => {
-  const el = document.querySelector(${JSON.stringify(selector)});
-  Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(el, ${JSON.stringify(value)});
-  el.dispatchEvent(new Event("change", { bubbles: true }));
-})()`);
+// React reads a <select> change from the native value setter plus a bubbling change event.
+// Waits for the option first: selects such as My store render only after GET /locations returns.
+async function select(selector, value) {
+  await waitFor(`document.querySelector(${JSON.stringify(selector)})?.querySelector(${JSON.stringify(`option[value="${value}"]`)})`, `${selector} option ${value}`);
+  await evaluate(`(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(el, ${JSON.stringify(value)});
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  })()`);
+}
 const staffCard = (orderId) => `[...document.querySelectorAll("div.rounded-lg")].find((el) => el.textContent.includes(${JSON.stringify(orderId)}))`;
 
 // ---------- shared steps ----------
