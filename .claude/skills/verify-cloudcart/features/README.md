@@ -13,6 +13,8 @@ Each file covers one feature a shopper or staff member uses: what it is, how to 
 Not driven yet:
 - sign-up and confirmation, which need a real inbox for Cognito's code;
 - the cart page's quantity edits and Remove (only used to empty the cart);
+- the category filter on the catalog;
+- a stale second press on a staff card (the 409 path);
 - in-store sales (the staff "In-store sale" checkbox);
 - the second store, `tidewater` (`TENANT_ID=tidewater npm run env:dev`);
 - hold expiry, which takes 10 minutes in dev. To check it, see [order-status.md](order-status.md).
